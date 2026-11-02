@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Personal reference and planning files: never in the repo
+SPEC.md
+LEARNING.md
+INTERVIEW_PREP.md
+day*/
+*.pdf
