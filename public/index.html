@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Test Store — Countersign demo</title>
+  <style>
+    :root { --ink:#1b1b1f; --muted:#6b6b76; --line:#e4e4ea; --bg:#fafaf7; --accent:#2a5cff; }
+    @media (prefers-color-scheme: dark) { :root { --ink:#ececf1; --muted:#9a9aa6; --line:#2b2b33; --bg:#141418; } }
+    * { box-sizing: border-box; }
+    body { margin:0; font:16px/1.5 system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+    main { max-width: 560px; margin: 0 auto; padding: 32px 16px; }
+    .card { border:1px solid var(--line); border-radius:12px; padding:20px; }
+    h1 { font-size:20px; margin:0 0 4px; }
+    .price { font-size:28px; font-weight:600; margin:12px 0; }
+    .muted { color:var(--muted); font-size:14px; }
+    #status { margin-top:16px; min-height:1.5em; }
+    .ok { color:#1a7f37; } .err { color:#c62828; }
+    code { font-size:13px; }
+  </style>
+</head>
+<body>
+<main>
+  <p class="muted">Sandbox demo store. No real money moves.</p>
+  <div class="card">
+    <h1>Hand-thrown ceramic mug</h1>
+    <div class="price">$38.00</div>
+    <div id="paypal-button-container"></div>
+    <div id="status" role="status"></div>
+  </div>
+</main>
+<script>
+  const statusEl = document.getElementById("status");
+  const say = (msg, cls) => { statusEl.textContent = msg; statusEl.className = cls || ""; };
+
+  async function createOrder() {
+    const res = await fetch("/api/orders", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sku: "mug" }),
+    });
+    if (!res.ok) throw new Error("Could not create the order");
+    const { orderId } = await res.json();
+    return { orderId };
+  }
+
+  async function onApprove(data) {
+    say("Capturing payment…");
+    const res = await fetch("/api/orders/" + encodeURIComponent(data.orderId) + "/capture", { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) return say("Payment capture failed.", "err");
+    say("Paid. Order " + data.orderId + " (capture " + body.captureId + ")", "ok");
+  }
+
+  async function onLoad() {
+    try {
+      const { clientId } = await (await fetch("/api/config")).json();
+      const sdk = await window.paypal.createInstance({ clientId, components: ["paypal-payments"] });
+      const eligibility = await sdk.findEligibleMethods();
+      if (!eligibility.isEligible("paypal")) return say("PayPal is not available here.", "err");
+
+      const session = await sdk.createPayPalOneTimePaymentSession({
+        onApprove,
+        onCancel: () => say("Payment cancelled."),
+        onError: (e) => { console.error(e); say("Something went wrong with PayPal.", "err"); },
+      });
+      const button = document.createElement("paypal-button");
+      button.addEventListener("click", async () => {
+        // Don't await createOrder() before start(): the browser can lose the click's user activation.
+        try { await session.start({ presentationMode: "auto" }, createOrder()); }
+        catch (e) { console.error(e); say("Checkout did not start.", "err"); }
+      });
+      document.getElementById("paypal-button-container").append(button);
+    } catch (e) { console.error(e); say("Could not load checkout.", "err"); }
+  }
+</script>
+<script async src="https://www.sandbox.paypal.com/web-sdk/v6/core" onload="onLoad()"></script>
+</body>
+</html>
