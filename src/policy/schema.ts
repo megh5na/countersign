@@ -28,6 +28,7 @@ const When = z.strictObject({
   days_since_delivery_lte: Minor.optional(),
   days_since_delivery_gte: Minor.optional(),
   order_total_minor_lte: Minor.optional(),
+  order_total_minor_gte: Minor.optional(), // inclusive; "$75 or more"
   buyer_refunds_90d_lte: Minor.optional(), // count of refunds, not money
 });
 export type When = z.infer<typeof When>;

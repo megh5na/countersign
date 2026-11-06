@@ -19,6 +19,7 @@ export const policies = pgTable(
   },
   (t) => [
     uniqueIndex("policies_version_uq").on(t.version),
+    uniqueIndex("policies_one_active_uq").on(t.status).where(sql`${t.status} = 'active'`), // at most one active policy
     check("policies_status_ck", sql`${t.status} in ('draft','active','retired')`),
   ],
 );

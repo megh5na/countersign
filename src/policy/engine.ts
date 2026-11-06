@@ -23,6 +23,7 @@ function matches(rule: Rule, p: Proposal, ctx: Context): boolean {
   const w = rule.when;
   if (w.claim_type_in && !w.claim_type_in.includes(p.claimType)) return false;
   if (w.order_total_minor_lte !== undefined && ctx.orderTotalMinor > w.order_total_minor_lte) return false;
+  if (w.order_total_minor_gte !== undefined && ctx.orderTotalMinor < w.order_total_minor_gte) return false;
   if (w.buyer_refunds_90d_lte !== undefined && ctx.buyerRefunds90dCount > w.buyer_refunds_90d_lte) return false;
   // Unknown delivery date: these conditions do not match, so an allow rule cannot fire on missing data.
   if (w.days_since_delivery_lte !== undefined && (ctx.daysSinceDelivery === null || ctx.daysSinceDelivery > w.days_since_delivery_lte)) return false;

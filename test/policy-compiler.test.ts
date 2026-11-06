@@ -13,7 +13,7 @@ const CAP_QUOTE = "capped at $100 per day";
 const rule = (over: Partial<Draft["rules"][number]>): Draft["rules"][number] => ({
   id: "R1", effect: "allow", remedy: "partial_tier_b",
   claim_type_in: null, days_since_delivery_lte: null, days_since_delivery_gte: null,
-  order_total_minor_lte: null, buyer_refunds_90d_lte: null, percent_of_capture: null, fixed_minor: null,
+  order_total_minor_lte: null, order_total_minor_gte: null, buyer_refunds_90d_lte: null, percent_of_capture: null, fixed_minor: null,
   source_quote: R1_QUOTE, ...over,
 });
 
@@ -140,6 +140,21 @@ describe("policy compiler", () => {
     const r = await compilePolicy(PROSE, fake(d).llm);
     expect(r.ambiguities).toEqual(["'a few days' was read as 3"]);
     expect(r.unsupported).toEqual(["VIP customers get free returns"]);
+  });
+
+  it("expresses 'orders above $75 always need my approval' with order_total_minor_gte (the gap the live compile found)", async () => {
+    const d = goodDraft();
+    d.rules.push(rule({ id: "R3", effect: "require_approval", remedy: "explain_no_refund", order_total_minor_gte: 7501, source_quote: "approval" }));
+    d.rules.push(rule({ id: "R4", effect: "allow", remedy: "explain_no_refund", claim_type_in: ["changed_mind"], source_quote: "approval" }));
+    d.tests = [
+      test("changed mind, $38 order: explain automatically", { claim_type: "changed_mind", remedy: "explain_no_refund", expected_decision: "ALLOW", expected_amount_minor: null }),
+      test("changed mind, $100 order: needs approval", { claim_type: "changed_mind", remedy: "explain_no_refund", order_total_minor: 10_000, expected_decision: "REQUIRE_APPROVAL", expected_amount_minor: null }),
+      test("exactly $75.00 is not above $75", { claim_type: "changed_mind", remedy: "explain_no_refund", order_total_minor: 7500, expected_decision: "ALLOW", expected_amount_minor: null }),
+    ];
+    const r = await compilePolicy("Orders above $75 always need my approval", fake(d).llm);
+    expect(r.schemaErrors).toEqual([]);
+    expect(r.mismatches).toBe(0);
+    expect(r.policy?.rules[2]?.when.order_total_minor_gte).toBe(7501);
   });
 
   it("a draft with zero tests can never be activated", async () => {

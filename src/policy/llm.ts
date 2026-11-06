@@ -16,7 +16,7 @@ How the engine works:
 - Remedies: full_refund, partial_tier_a, partial_tier_b (these move money); replacement_offer, explain_no_refund, escalate (these do not).
 - Claim types: damaged, not_received, not_as_described, changed_mind, other.
 - A rule applies to ONE remedy. If a statement covers several remedies, write one rule per remedy.
-- Conditions (set unused ones to null): claim_type_in, days_since_delivery_lte / _gte (whole days), order_total_minor_lte, buyer_refunds_90d_lte (a COUNT of that buyer's refunds in 90 days).
+- Conditions (set unused ones to null): claim_type_in, days_since_delivery_lte / _gte (whole days), order_total_minor_lte / _gte (both inclusive: "$75 or less" is lte 7500, "$75 or more" is gte 7500; "above $75" is gte 7501), buyer_refunds_90d_lte (a COUNT of that buyer's refunds in 90 days).
 - Amounts apply to money-moving remedies only. Use percent_of_capture (0-100) OR fixed_minor, never both. An allow rule for a money-moving remedy must have an amount.
 - ALL money is integer cents ($38.00 = 3800). Never use decimals.
 - Global limits: daily_auto_refund_cap_minor (total auto-approved refunds per day) and buyer_90d_cap_minor (total per buyer over 90 days). Use null if the merchant states none.

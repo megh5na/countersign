@@ -81,6 +81,16 @@ describe("conditions", () => {
     expect(evaluate(damaged, ctx({ orderTotalMinor: 7501 }), policy([rule])).decision).toBe("REQUIRE_APPROVAL");
   });
 
+  it("order_total_minor_gte is inclusive and works with lte as a band", () => {
+    const ask = { id: "R_BIG", effect: "require_approval", remedy: "partial_tier_b", when: { order_total_minor_gte: 7501 } };
+    expect(evaluate(damaged, ctx({ orderTotalMinor: 7501, captureAmountMinor: 7501, refundableMinor: 7501 }), policy([allowB, ask])).decision).toBe("REQUIRE_APPROVAL");
+    expect(evaluate(damaged, ctx({ orderTotalMinor: 7500 }), policy([allowB, ask])).decision).toBe("ALLOW");
+    const band = { ...allowB, when: { order_total_minor_gte: 1000, order_total_minor_lte: 5000 } };
+    expect(evaluate(damaged, ctx({ orderTotalMinor: 999 }), policy([band])).decision).toBe("REQUIRE_APPROVAL");
+    expect(evaluate(damaged, ctx({ orderTotalMinor: 1000 }), policy([band])).decision).toBe("ALLOW");
+    expect(evaluate(damaged, ctx({ orderTotalMinor: 5001 }), policy([band])).decision).toBe("REQUIRE_APPROVAL");
+  });
+
   it("the lowest amount wins when several allow rules match", () => {
     const r = evaluate(damaged, ctx(), policy([allowB, { ...allowB, id: "R_SMALL", amount: { fixed_minor: 500 } }]));
     expect(r.amountMinor).toBe(500);

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "policies_one_active_uq" ON "policies" USING btree ("status") WHERE "policies"."status" = 'active';

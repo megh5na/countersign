@@ -19,6 +19,7 @@ export const DraftRule = z.object({
   days_since_delivery_lte: Int.nullable(),
   days_since_delivery_gte: Int.nullable(),
   order_total_minor_lte: Int.nullable(),
+  order_total_minor_gte: Int.nullable(),
   buyer_refunds_90d_lte: Int.nullable(),
   percent_of_capture: Int.nullable(),
   fixed_minor: Int.nullable(),
@@ -60,6 +61,7 @@ function toPolicy(d: Draft): { candidate: unknown; errors: string[] } {
     if (r.days_since_delivery_lte !== null) when.days_since_delivery_lte = r.days_since_delivery_lte;
     if (r.days_since_delivery_gte !== null) when.days_since_delivery_gte = r.days_since_delivery_gte;
     if (r.order_total_minor_lte !== null) when.order_total_minor_lte = r.order_total_minor_lte;
+    if (r.order_total_minor_gte !== null) when.order_total_minor_gte = r.order_total_minor_gte;
     if (r.buyer_refunds_90d_lte !== null) when.buyer_refunds_90d_lte = r.buyer_refunds_90d_lte;
 
     let amount: unknown;

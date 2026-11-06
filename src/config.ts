@@ -13,6 +13,7 @@ const Env = z.object({
   PAYPAL_CLIENT_SECRET: z.string().min(1),
   PAYPAL_WEBHOOK_ID: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
+  ADMIN_TOKEN: z.string().min(16).optional(), // guards the policy routes; they answer 503 until it is set
   DATABASE_URL: z.string().min(1),
   PORT: z.coerce.number().default(3000),
 });
