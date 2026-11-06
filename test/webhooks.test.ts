@@ -40,6 +40,13 @@ describe("webhook route (invariant I9)", () => {
     expect(s.processed).toEqual(["WH-1"]);
   });
 
+  it("accepts a verified event that has no resource field", async () => {
+    const s = setup();
+    const res = await s.post({ id: "WH-2", event_type: "CUSTOMER.DISPUTE.CREATED" });
+    expect(res.status).toBe(200);
+    expect(s.processed).toEqual(["WH-2"]);
+  });
+
   it("rejects an invalid signature and stores nothing", async () => {
     const s = setup({ verified: false });
     const res = await s.post(event);

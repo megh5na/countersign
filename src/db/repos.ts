@@ -1,3 +1,5 @@
+// webhook repository and order repository. used by the app and the webhook endpoint.
+
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -8,7 +10,7 @@ import { orders, refundLedger, webhookEvents } from "./schema.js";
 export const WebhookEvent = z.object({
   id: z.string().min(1),
   event_type: z.string().min(1),
-  resource: z.unknown(),
+  resource: z.unknown().optional(), // some event types carry no resource; the signature is what we trust
 });
 export type WebhookEvent = z.infer<typeof WebhookEvent>;
 
