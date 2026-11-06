@@ -90,6 +90,7 @@ export function evaluate(proposal: Proposal, ctx: Context, policy: Policy): Deci
       reasons.push(why);
     };
     if (amount === null) downgrade("SYS_NO_AMOUNT", "no amount could be computed");
+    else if (amount <= 0) downgrade("SYS_ZERO_AMOUNT", "the computed refund is $0 (check the rule's amount)");
     else {
       if (ctx.currency !== policy.currency) downgrade("SYS_CURRENCY", "capture currency differs from the policy currency");
       const daily = policy.limits?.daily_auto_refund_cap_minor;

@@ -1,3 +1,5 @@
+// to post events, provide an update path.
+
 import { Hono } from "hono";
 import { WebhookEvent, type WebhookRepo } from "../db/repos.js";
 import type { PayPalClient } from "../paypal/client.js";
