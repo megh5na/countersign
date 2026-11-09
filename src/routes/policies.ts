@@ -1,11 +1,11 @@
 // Admin-only API for the policy lifecycle: compile (spends model money) -> review -> activate.
 // Nothing here is public: without ADMIN_TOKEN configured every route answers 503.
 
-import { createHash, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { PolicyRepo } from "../db/policies.js";
 import type { CompileReport } from "../policy/compiler.js";
+import { requireAdmin } from "./admin.js";
 
 interface Deps {
   repo: PolicyRepo;
@@ -16,13 +16,6 @@ interface Deps {
 const CompileBody = z.object({ prose: z.string().trim().min(20).max(8000) });
 const ActivateBody = z.object({ rulesHash: z.string().length(64), confirm: z.literal(true) });
 
-const digest = (s: string) => createHash("sha256").update(s).digest();
-
-function tokenOk(header: string | undefined, expected: string): boolean {
-  const given = header?.startsWith("Bearer ") ? header.slice(7) : "";
-  return timingSafeEqual(digest(given), digest(expected)); // fixed-length digests: no length leak, constant time
-}
-
 // What gets stored next to the rules: everything a human needs to review the draft.
 const reportOf = (r: CompileReport) => ({
   cases: r.cases, mismatches: r.mismatches, warnings: r.warnings,
@@ -32,11 +25,7 @@ const reportOf = (r: CompileReport) => ({
 export function policyRoutes({ repo, compile, adminToken }: Deps) {
   const app = new Hono();
 
-  app.use("*", async (c, next) => {
-    if (!adminToken) return c.json({ error: "admin_not_configured" }, 503);
-    if (!tokenOk(c.req.header("authorization"), adminToken)) return c.json({ error: "unauthorized" }, 401);
-    await next();
-  });
+  app.use("*", requireAdmin(adminToken));
 
   app.post("/compile", async (c) => {
     if (!compile) return c.json({ error: "compiler_not_configured" }, 503);

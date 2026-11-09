@@ -1,0 +1,3 @@
+ALTER TABLE "cases" ADD COLUMN "outcome_reason" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "cases_one_active_per_order_uq" ON "cases" USING btree ("order_id") WHERE "cases"."status" in ('open','processing');--> statement-breakpoint
+ALTER TABLE "cases" ADD CONSTRAINT "cases_status_ck" CHECK ("cases"."status" in ('open','processing','resolved','needs_approval','denied','NEEDS_HUMAN','error'));
