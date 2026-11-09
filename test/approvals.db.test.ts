@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { AgentModel, Block, ModelResponse } from "../src/agent/agent.js";
 import { createApprovalRepo } from "../src/db/approvals.js";
+import { createCaseRepo } from "../src/db/cases.js";
 import type { Db } from "../src/db/client.js";
 import { approvals, cases, executions, policies, refundLedger } from "../src/db/schema.js";
 import { approvalParamsHash } from "../src/exec/approved.js";
@@ -317,6 +318,89 @@ describe.skipIf(!dbTestsEnabled)("approvals and sweeper on real Postgres", { tim
       expect(late.approvedExecuted).toBe(1);
       expect(pp.calls).toHaveLength(1);
       expect(await caseRow(s.caseId)).toMatchObject({ status: "resolved" });
+    });
+  });
+
+  describe("merchant resolves an escalated case, and the case list", () => {
+    // An escalated case: has an agent run and an 'escalate' proposal, but no approval.
+    async function escalated(o: Seed = {}) {
+      const s = await seedApproval({ ...o, caseStatus: "NEEDS_HUMAN" });
+      await db.delete(approvals).where(eq(approvals.id, s.approvalId));
+      return s;
+    }
+
+    it("a proposed refund becomes a normal pending approval that goes through the same confirm-and-execute path", async () => {
+      const s = await escalated();
+      const m = await repo().createManual(s.caseId, { remedy: "partial_tier_a", amountMinor: 1900 });
+      expect(m.ok).toBe(true);
+      if (!m.ok) return;
+      expect(await caseRow(s.caseId)).toMatchObject({ status: "needs_approval" });
+      const [v] = await repo().list("pending");
+      expect(v).toMatchObject({ id: m.approvalId, remedy: "partial_tier_a", claimType: "damaged", suggestedAmountMinor: 1900 });
+      expect(v?.ruleIds).toEqual(["MANUAL"]);
+
+      expect(await repo().approve(m.approvalId, { paramsHash: m.paramsHash })).toEqual({ ok: true, amountMinor: 1900 });
+      const pp = fakePaypal();
+      expect(await run(pp, m.approvalId)).toMatchObject({ status: "resolved" });
+      expect(pp.calls).toHaveLength(1);
+      expect(pp.calls[0]).toMatchObject({ amountMinor: 1900, captureId: s.captureId });
+    });
+
+    it("refuses what it cannot safely do", async () => {
+      expect(await repo().createManual("nope", { remedy: "full_refund", amountMinor: 100 })).toEqual({ ok: false, error: "not_found" });
+
+      const pending = await seedApproval(); // case is needs_approval, not NEEDS_HUMAN
+      expect(await repo().createManual(pending.caseId, { remedy: "full_refund", amountMinor: 100 })).toEqual({ ok: false, error: "not_resolvable" });
+
+      const big = await escalated();
+      expect(await repo().createManual(big.caseId, { remedy: "full_refund", amountMinor: 3801 })).toEqual({ ok: false, error: "exceeds_refundable" });
+
+      const noPayer = await escalated();
+      await db.execute(sql`update orders set payer_id = null where id = ${noPayer.orderId}`);
+      expect(await repo().createManual(noPayer.caseId, { remedy: "full_refund", amountMinor: 100 })).toEqual({ ok: false, error: "order_not_ready" });
+
+      const bare = await seedApproval(); // a case that never reached the agent has no run to attach a proposal to
+      await client.unsafe(`insert into cases (id, source, order_id, status, buyer_message) values ('c-bare', 'form', ${lit(bare.orderId)}, 'NEEDS_HUMAN', 'x');`);
+      expect(await repo().createManual("c-bare", { remedy: "full_refund", amountMinor: 100 })).toEqual({ ok: false, error: "no_agent_run" });
+    });
+
+    it("needs an active policy and an agent run", async () => {
+      const s = await escalated();
+      await db.update(policies).set({ status: "retired" }).where(eq(policies.id, POLICY_ID));
+      expect(await repo().createManual(s.caseId, { remedy: "full_refund", amountMinor: 100 })).toEqual({ ok: false, error: "no_policy" });
+    });
+
+    it("a human-proposed refund still cannot override a DENY: it is refused at execution", async () => {
+      const s = await escalated({ delivered: 120 }); // rule R2 denies partial_tier_b after 90 days
+      const m = await repo().createManual(s.caseId, { remedy: "partial_tier_b", amountMinor: 1000 });
+      if (!m.ok) throw new Error("expected the proposal to be created");
+      await repo().approve(m.approvalId, { paramsHash: m.paramsHash });
+      const pp = fakePaypal();
+      expect((await run(pp, m.approvalId)).result).toMatchObject({ reason: "now_denied_by_policy" });
+      expect(pp.calls).toHaveLength(0);
+    });
+
+    it("decline closes an escalated case exactly once", async () => {
+      const s = await escalated();
+      const cases = createCaseRepo(db);
+      expect(await cases.decline(s.caseId)).toBe("declined");
+      expect(await caseRow(s.caseId)).toMatchObject({ status: "denied", outcomeReason: "declined by the merchant" });
+      expect(await cases.decline(s.caseId)).toBe("not_declinable");
+      expect(await cases.decline("nope")).toBe("not_found");
+    });
+
+    it("the case list is newest-first, filterable, shortens long messages, and carries the latest decision", async () => {
+      const a = await seedApproval({ caseStatus: "needs_approval" });
+      await new Promise((r) => setTimeout(r, 20));
+      const b = await escalated();
+      await db.execute(sql`update cases set buyer_message = ${"x".repeat(500)} where id = ${b.caseId}`);
+      const cases = createCaseRepo(db);
+      const all = await cases.list();
+      expect(all.map((c) => c.id)).toEqual([b.caseId, a.caseId]);
+      expect(all[0]?.buyerMessage).toHaveLength(240);
+      expect(all[1]).toMatchObject({ paypalOrderId: a.paypalOrderId, decision: { decision: "REQUIRE_APPROVAL", amountMinor: 1900 } });
+      expect((await cases.list("NEEDS_HUMAN")).map((c) => c.id)).toEqual([b.caseId]);
+      expect(await cases.list("resolved")).toEqual([]);
     });
   });
 });

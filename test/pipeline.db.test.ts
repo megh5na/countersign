@@ -102,7 +102,7 @@ describe.skipIf(!dbTestsEnabled)("case pipeline on real Postgres", { timeout: 18
     expect(pp.calls[0]).toMatchObject({ amountMinor: 1900 }); // 50% of $38, decided by code
     const c = await caseRow(caseId);
     expect(c).toMatchObject({ status: "resolved" });
-    expect(c?.outcomeReason).toMatch(/refunded 1900/);
+    expect(c?.outcomeReason).toMatch(/refunded \$19\.00 \(REF-1\)/);
 
     const [run] = await db.select().from(agentRuns);
     expect(run).toMatchObject({ caseId, outcome: "proposal", tokensIn: 300, tokensOut: 60 });

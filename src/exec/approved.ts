@@ -13,6 +13,8 @@ import { ClaimType, Policy } from "../policy/schema.js";
 import { LOCK, type ExecuteResult, type ExecutionRow, type ExecutorDeps, settle } from "./executor.js";
 import { loadFacts } from "./facts.js";
 
+export const APPROVAL_TTL_MS = 48 * 3_600_000; // an approval request is valid for 48 hours
+
 // What a reviewer is actually approving. Changing any of these changes the hash.
 export const approvalParamsHash = (p: { decisionId: string; orderId: string; remedy: string; amountMinor: number | null }) => policyHash(p);
 

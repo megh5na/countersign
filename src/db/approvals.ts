@@ -2,11 +2,11 @@
 
 import { and, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { approvalParamsHash } from "../exec/approved.js";
+import { APPROVAL_TTL_MS, approvalParamsHash } from "../exec/approved.js";
 import { loadFacts } from "../exec/facts.js";
 import { buildContext } from "../policy/context.js";
 import type { Db } from "./client.js";
-import { approvals, cases, decisions, orders, proposals } from "./schema.js";
+import { agentRuns, approvals, cases, decisions, orders, policies, proposals } from "./schema.js";
 
 export interface ApprovalView {
   id: string;
@@ -29,12 +29,19 @@ export interface ApprovalView {
 export type ApproveResult =
   | { ok: true; amountMinor: number }
   | { ok: false; error: "not_found" | "not_pending" | "expired" | "hash_mismatch" | "amount_required" | "exceeds_refundable" | "order_not_ready" };
+export type ManualRemedy = "full_refund" | "partial_tier_a" | "partial_tier_b";
+export type ManualResult =
+  | { ok: true; approvalId: string; paramsHash: string; amountMinor: number }
+  | { ok: false; error: "not_found" | "not_resolvable" | "no_agent_run" | "no_policy" | "order_not_ready" | "exceeds_refundable" };
 export type RejectResult = { ok: true } | { ok: false; error: "not_found" | "not_pending" | "hash_mismatch" };
 
 export interface ApprovalRepo {
   create(a: { decisionId: string; orderId: string; remedy: string; amountMinor: number | null; policyHash: string; expiresAt: Date }): Promise<string | null>;
   list(status?: string): Promise<ApprovalView[]>;
   get(id: string): Promise<ApprovalView | undefined>;
+  // Merchant-initiated refund for an escalated (NEEDS_HUMAN) case. It becomes an ordinary pending approval, so the
+  // same hash, expiry, single-use, policy-pin and DENY re-check protections apply when it is confirmed and executed.
+  createManual(caseId: string, input: { remedy: ManualRemedy; amountMinor: number }, now?: Date): Promise<ManualResult>;
   approve(id: string, input: { paramsHash: string; amountMinor?: number }, now?: Date): Promise<ApproveResult>;
   reject(id: string, paramsHash: string, now?: Date): Promise<RejectResult>;
   caseIdFor(approvalId: string): Promise<string | undefined>;
@@ -79,6 +86,40 @@ export function createApprovalRepo(db: Db): ApprovalRepo {
     async get(id) {
       const [row] = await viewQuery().where(eq(approvals.id, id));
       return row && toView(row);
+    },
+
+    async createManual(caseId, input, now = new Date()) {
+      return db.transaction(async (tx) => {
+        const [c] = await tx.select().from(cases).where(eq(cases.id, caseId)).for("update");
+        if (!c) return { ok: false, error: "not_found" } as const;
+        if (c.status !== "NEEDS_HUMAN") return { ok: false, error: "not_resolvable" } as const;
+        const [order] = c.orderId ? await tx.select().from(orders).where(eq(orders.id, c.orderId)) : [];
+        if (!order?.captureId || !order.payerId) return { ok: false, error: "order_not_ready" } as const;
+        const [run] = await tx.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.caseId, caseId)).orderBy(desc(agentRuns.createdAt)).limit(1);
+        if (!run) return { ok: false, error: "no_agent_run" } as const; // proposals need a run; a case that never reached the agent cannot be resolved here
+        const [pol] = await tx.select().from(policies).where(eq(policies.status, "active"));
+        if (!pol) return { ok: false, error: "no_policy" } as const;
+        const [prev] = await tx.select({ claimType: proposals.claimType }).from(proposals).where(eq(proposals.caseId, caseId)).orderBy(desc(proposals.createdAt)).limit(1);
+
+        const ctx = buildContext(await loadFacts(tx, order, order.captureId, order.payerId, now));
+        if (input.amountMinor > ctx.refundableMinor) return { ok: false, error: "exceeds_refundable" } as const;
+
+        const proposalId = randomUUID(), decisionId = randomUUID(), approvalId = randomUUID();
+        const paramsHash = approvalParamsHash({ decisionId, orderId: order.id, remedy: input.remedy, amountMinor: input.amountMinor });
+        await tx.insert(proposals).values({
+          id: proposalId, caseId, runId: run.id, claimType: prev?.claimType ?? "other", remedy: input.remedy, captureHandle: "manual",
+          paramsHash, messageDraft: "Resolved manually by the merchant.",
+        });
+        await tx.insert(decisions).values({
+          id: decisionId, proposalId, policyId: pol.id, decision: "REQUIRE_APPROVAL", amountMinor: input.amountMinor, ruleIds: ["MANUAL"],
+          contextJson: { context: ctx, reasons: ["proposed by the merchant for an escalated case"], manual: true },
+        });
+        await tx.insert(approvals).values({
+          id: approvalId, decisionId, paramsHash, policyHash: pol.rulesHash, amountMinor: input.amountMinor, expiresAt: new Date(now.getTime() + APPROVAL_TTL_MS),
+        });
+        await tx.update(cases).set({ status: "needs_approval", outcomeReason: "manual refund proposed by the merchant; awaiting confirmation" }).where(eq(cases.id, caseId));
+        return { ok: true, approvalId, paramsHash, amountMinor: input.amountMinor } as const;
+      });
     },
 
     async approve(id, input, now = new Date()) {

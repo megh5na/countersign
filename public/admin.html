@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Buyer and model text is untrusted. Besides inserting it with textContent only, scripts are restricted to this origin's files. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'" />
+  <title>Countersign — merchant console</title>
+  <style>
+    :root { --ink:#1b1b1f; --muted:#6b6b76; --line:#e4e4ea; --bg:#fafaf7; --card:#ffffff; --accent:#2a5cff; --ok:#1a7f37; --warn:#9a6700; --bad:#c62828; --okbg:#e6f4ea; --warnbg:#fff4d6; --badbg:#fdecea; --infobg:#e8eefc; }
+    @media (prefers-color-scheme: dark) { :root { --ink:#ececf1; --muted:#9a9aa6; --line:#2b2b33; --bg:#141418; --card:#1b1b21; --ok:#5ccb7a; --warn:#e3b341; --bad:#ff7b72; --okbg:#12261a; --warnbg:#2b2410; --badbg:#2e1716; --infobg:#17203a; } }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; } /* author display rules (flex, inline-block) would otherwise override the hidden attribute */
+    body { margin:0; font:15px/1.5 system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+    header { border-bottom:1px solid var(--line); background:var(--card); }
+    .bar { max-width:1000px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+    .brand { font-weight:700; letter-spacing:.2px; }
+    .brand small { color:var(--muted); font-weight:400; margin-left:8px; }
+    nav { display:flex; gap:4px; margin-left:8px; }
+    nav button { border:0; background:none; color:var(--muted); padding:8px 12px; border-radius:8px; font:inherit; cursor:pointer; }
+    nav button[aria-selected="true"] { background:var(--infobg); color:var(--accent); font-weight:600; }
+    .spacer { flex:1; }
+    main { max-width:1000px; margin:0 auto; padding:20px 16px 64px; }
+    .card { border:1px solid var(--line); background:var(--card); border-radius:12px; padding:16px; margin-bottom:12px; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .muted { color:var(--muted); font-size:13px; }
+    h2 { font-size:18px; margin:0 0 12px; }
+    h3 { font-size:14px; margin:16px 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+    .chip { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; background:var(--infobg); color:var(--accent); white-space:nowrap; }
+    .chip.ok { background:var(--okbg); color:var(--ok); } .chip.warn { background:var(--warnbg); color:var(--warn); } .chip.bad { background:var(--badbg); color:var(--bad); }
+    .amount { font-size:24px; font-weight:700; }
+    blockquote { margin:8px 0; padding:8px 12px; border-left:3px solid var(--line); color:var(--ink); white-space:pre-wrap; overflow-wrap:anywhere; }
+    blockquote.draft { border-left-color:var(--accent); }
+    button.btn { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+    button.btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+    button.btn.danger { color:var(--bad); }
+    button.btn.confirm { background:var(--bad); border-color:var(--bad); color:#fff; }
+    button.btn:disabled { opacity:.5; cursor:default; }
+    input, select { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
+    input.money { width:120px; }
+    table { width:100%; border-collapse:collapse; }
+    th { text-align:left; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; padding:6px 8px; }
+    td { padding:10px 8px; border-top:1px solid var(--line); vertical-align:top; }
+    tr.click { cursor:pointer; } tr.click:hover td { background:var(--infobg); }
+    .banner { padding:10px 14px; border-radius:10px; margin-bottom:12px; }
+    .banner.err { background:var(--badbg); color:var(--bad); } .banner.okmsg { background:var(--okbg); color:var(--ok); }
+    .empty { text-align:center; color:var(--muted); padding:40px 0; }
+    pre { margin:0; padding:8px 10px; background:var(--bg); border:1px solid var(--line); border-radius:8px; overflow:auto; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    details { margin:4px 0; } summary { cursor:pointer; color:var(--muted); }
+    ul.plain { margin:0; padding-left:18px; }
+    .rule { display:grid; grid-template-columns:56px 1fr; gap:12px; padding:12px 0; border-top:1px solid var(--line); }
+    .rule:first-child { border-top:0; }
+    .login { max-width:420px; margin:80px auto; }
+    @media (max-width:640px) { .hide-sm { display:none; } input.money { width:100px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="brand">Countersign<small>merchant console · sandbox</small></div>
+      <nav id="tabs" role="tablist" hidden>
+        <button role="tab" data-tab="approvals" aria-selected="true">Approvals <span id="badge" class="chip warn" hidden></span></button>
+        <button role="tab" data-tab="cases" aria-selected="false">Cases</button>
+        <button role="tab" data-tab="policy" aria-selected="false">Policy</button>
+      </nav>
+      <div class="spacer"></div>
+      <button class="btn" id="signout" hidden>Sign out</button>
+    </div>
+  </header>
+  <main id="app"></main>
+  <script src="/admin.js"></script>
+</body>
+</html>

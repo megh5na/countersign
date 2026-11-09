@@ -17,6 +17,12 @@
     #status { margin-top:16px; min-height:1.5em; }
     .ok { color:#1a7f37; } .err { color:#c62828; }
     code { font-size:13px; }
+    label { display:block; font-size:14px; margin:12px 0 4px; }
+    input, textarea { width:100%; font:inherit; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--ink); }
+    textarea { min-height:96px; resize:vertical; }
+    button.send { margin-top:12px; font:inherit; font-weight:600; padding:10px 16px; border-radius:8px; border:0; background:var(--accent); color:#fff; cursor:pointer; }
+    button.send:disabled { opacity:.5; cursor:default; }
+    .card + .card { margin-top:16px; }
   </style>
 </head>
 <body>
@@ -27,6 +33,17 @@
     <div class="price">$38.00</div>
     <div id="paypal-button-container"></div>
     <div id="status" role="status"></div>
+  </div>
+
+  <div class="card" id="claim">
+    <h1>Something wrong with your order?</h1>
+    <p class="muted">Tell us what happened. An automated assistant reviews your request, and the shop owner stays in control of any refund.</p>
+    <label for="claim-order">Order number</label>
+    <input id="claim-order" autocomplete="off" maxlength="64" placeholder="Shown after you pay" />
+    <label for="claim-msg">What went wrong?</label>
+    <textarea id="claim-msg" maxlength="2000" placeholder="For example: the mug arrived broken."></textarea>
+    <button class="send" id="claim-send" type="button">Report a problem</button>
+    <div id="claim-status" role="status" style="margin-top:12px;min-height:1.5em"></div>
   </div>
 </main>
 <script>
@@ -48,7 +65,50 @@
     const body = await res.json();
     if (!res.ok) return say("Payment capture failed.", "err");
     say("Paid. Order " + data.orderId + " (capture " + body.captureId + ")", "ok");
+    try { localStorage.setItem("cs_last_order", data.orderId); } catch {}
+    document.getElementById("claim-order").value = data.orderId;
   }
+
+  // ---- buyer support form ----
+  const claimStatus = document.getElementById("claim-status");
+  const claimSay = (msg, cls) => { claimStatus.textContent = msg; claimStatus.className = cls || ""; };
+  try { const last = localStorage.getItem("cs_last_order"); if (last) document.getElementById("claim-order").value = last; } catch {}
+  const BUYER_STATUS = {
+    open: "We received your request and are looking into it…",
+    processing: "We are reviewing your request…",
+    needs_approval: "The shop owner is reviewing your request. We will follow up.",
+    NEEDS_HUMAN: "Your request was passed to the shop owner, who will follow up.",
+    resolved: "Your request has been resolved. If a refund was issued, it will show in your PayPal account.",
+    denied: "We are sorry, we could not approve this request.",
+    error: "Something went wrong on our side. Please try again later.",
+  };
+  const POST_ERRORS = {
+    400: "Please enter your order number and describe the problem (at least 10 characters).",
+    404: "We could not find that order number.", 409: "You already have an open request for this order.",
+    422: "That order has no completed payment yet.", 429: "We are busy right now. Please try again in a minute.",
+    503: "Support requests are not available right now.",
+  };
+  document.getElementById("claim-send").addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const orderId = document.getElementById("claim-order").value.trim();
+    const message = document.getElementById("claim-msg").value.trim();
+    btn.disabled = true; claimSay("Sending…");
+    try {
+      const res = await fetch("/api/cases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId, message }) });
+      if (!res.ok) return claimSay(POST_ERRORS[res.status] || "Could not send your request.", "err");
+      const { caseId } = await res.json();
+      claimSay(BUYER_STATUS.open);
+      for (let i = 0; i < 60; i++) {           // poll for up to about 3 minutes
+        await new Promise((r) => setTimeout(r, 3000));
+        const s = await fetch("/api/cases/" + encodeURIComponent(caseId));
+        if (!s.ok) continue;
+        const { status } = await s.json();
+        claimSay(BUYER_STATUS[status] || "Your request is being processed.", status === "resolved" ? "ok" : status === "error" ? "err" : "");
+        if (status !== "open" && status !== "processing") return;
+      }
+    } catch (e) { console.error(e); claimSay("Could not reach the server.", "err"); }
+    finally { btn.disabled = false; }
+  });
 
   async function onLoad() {
     try {

@@ -1,17 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { ApprovalRepo, ApprovalView, ApproveResult, RejectResult } from "../src/db/approvals.js";
-import type { CaseRepo } from "../src/db/cases.js";
+import type { ApprovalRepo, ApprovalView, ApproveResult, ManualResult, RejectResult } from "../src/db/approvals.js";
+import type { CaseRepo, DeclineResult } from "../src/db/cases.js";
 import { adminRoutes } from "../src/routes/admin.js";
 
 const TOKEN = "correct-horse-battery-staple";
 const HASH = "a".repeat(64);
-const casesStub: CaseRepo = { open: async () => ({ ok: false, error: "unknown_order" }), status: async () => undefined, timeline: async () => undefined, markDelivered: async () => false };
+const casesStub: CaseRepo = { list: async () => [], decline: async () => "declined", open: async () => ({ ok: false, error: "unknown_order" }), status: async () => undefined, timeline: async () => undefined, markDelivered: async () => false };
 const view = (over: Partial<ApprovalView> = {}): ApprovalView => ({
   id: "ap-1", status: "pending", paramsHash: HASH, suggestedAmountMinor: 1900, expiresAt: new Date(), createdAt: new Date(), caseId: "case-1", paypalOrderId: "PP-1",
   orderTotalMinor: 3800, remedy: "partial_tier_b", claimType: "damaged", buyerMessage: "broken", agentDraft: "sorry", ruleIds: ["SYS_NO_MATCH"], reasons: [], ...over,
 });
 
-function setup(o: { approve?: ApproveResult; reject?: RejectResult; configured?: boolean; runThrows?: boolean } = {}) {
+function setup(o: { approve?: ApproveResult; reject?: RejectResult; manual?: ManualResult; decline?: DeclineResult; configured?: boolean; runThrows?: boolean } = {}) {
+  const manualCalls: { caseId: string; input: { remedy: string; amountMinor: number } }[] = [];
+  const declined: string[] = [];
   const approveCalls: { id: string; input: { paramsHash: string; amountMinor?: number } }[] = [];
   const rejectCalls: [string, string][] = [];
   const ran: string[] = [];
@@ -20,6 +22,7 @@ function setup(o: { approve?: ApproveResult; reject?: RejectResult; configured?:
     async create() { return "x"; },
     async list(status) { listed.push(status); return [view()]; },
     async get(id) { return id === "ap-1" ? view() : undefined; },
+    async createManual(caseId, input) { manualCalls.push({ caseId, input }); return o.manual ?? { ok: true, approvalId: "ap-m", paramsHash: HASH, amountMinor: input.amountMinor }; },
     async approve(id, input) { approveCalls.push({ id, input }); return o.approve ?? { ok: true, amountMinor: input.amountMinor ?? 1900 }; },
     async reject(id, hash) { rejectCalls.push([id, hash]); return o.reject ?? { ok: true }; },
     async caseIdFor() { return "case-1"; },
@@ -27,12 +30,13 @@ function setup(o: { approve?: ApproveResult; reject?: RejectResult; configured?:
   const runApproved = async (id: string) => {
     ran.push(id);
     if (o.runThrows) throw new Error("db down");
-    return { status: "resolved", reason: "refunded 1900 minor units (REF-1)" };
+    return { status: "resolved", reason: "refunded $19.00 (REF-1)" };
   };
-  const app = adminRoutes(o.configured === false ? { cases: casesStub, adminToken: TOKEN } : { cases: casesStub, approvals, runApproved, adminToken: TOKEN });
+  const cases: CaseRepo = { ...casesStub, async decline(id) { declined.push(id); return o.decline ?? "declined"; } };
+  const app = adminRoutes(o.configured === false ? { cases, adminToken: TOKEN } : { cases, approvals, runApproved, adminToken: TOKEN });
   const call = (method: string, path: string, body?: unknown, token: string | null = TOKEN) =>
     app.request(path, { method, headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
-  return { call, approveCalls, rejectCalls, ran, listed };
+  return { call, approveCalls, rejectCalls, ran, listed, manualCalls, declined };
 }
 
 describe("approval routes", () => {
@@ -68,7 +72,7 @@ describe("approval routes", () => {
     const s = setup();
     const res = await s.call("POST", "/approvals/ap-1/approve", { paramsHash: HASH, amountMinor: 1500 });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ approved: true, amountMinor: 1500, caseStatus: "resolved", detail: "refunded 1900 minor units (REF-1)" });
+    expect(await res.json()).toEqual({ approved: true, amountMinor: 1500, caseStatus: "resolved", detail: "refunded $19.00 (REF-1)" });
     expect(s.approveCalls).toEqual([{ id: "ap-1", input: { paramsHash: HASH, amountMinor: 1500 } }]);
     expect(s.ran).toEqual(["ap-1"]);
   });
@@ -108,5 +112,42 @@ describe("approval routes", () => {
     expect((await setup({ reject: { ok: false, error: "not_found" } }).call("POST", "/approvals/x/reject", { paramsHash: HASH })).status).toBe(404);
     expect((await setup({ reject: { ok: false, error: "hash_mismatch" } }).call("POST", "/approvals/x/reject", { paramsHash: HASH })).status).toBe(409);
     expect((await setup({ reject: { ok: false, error: "not_pending" } }).call("POST", "/approvals/x/reject", { paramsHash: HASH })).status).toBe(409);
+  });
+
+  it("resolve: a merchant refund becomes a pending approval (not an execution) and returns the hash to confirm", async () => {
+    const s = setup();
+    const res = await s.call("POST", "/cases/case-1/resolve", { action: "refund", remedy: "partial_tier_a", amountMinor: 1900 });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ approvalId: "ap-m", paramsHash: HASH, amountMinor: 1900 });
+    expect(s.manualCalls).toEqual([{ caseId: "case-1", input: { remedy: "partial_tier_a", amountMinor: 1900 } }]);
+    expect(s.ran).toHaveLength(0); // nothing is executed until the approval is confirmed
+  });
+
+  it("resolve: decline closes the case without touching approvals", async () => {
+    const s = setup();
+    expect((await s.call("POST", "/cases/case-1/resolve", { action: "decline" })).status).toBe(200);
+    expect(s.declined).toEqual(["case-1"]);
+    expect(s.manualCalls).toHaveLength(0);
+    expect((await setup({ decline: "not_found" }).call("POST", "/cases/x/resolve", { action: "decline" })).status).toBe(404);
+    expect((await setup({ decline: "not_declinable" }).call("POST", "/cases/x/resolve", { action: "decline" })).status).toBe(409);
+  });
+
+  it("resolve: validates the body and maps every refusal", async () => {
+    const s = setup();
+    for (const body of [{}, { action: "refund" }, { action: "refund", remedy: "escalate", amountMinor: 100 }, { action: "refund", remedy: "full_refund", amountMinor: 0 }, { action: "refund", remedy: "full_refund", amountMinor: 1.5 }, { action: "approve" }]) {
+      expect((await s.call("POST", "/cases/case-1/resolve", body)).status).toBe(400);
+    }
+    expect(s.manualCalls).toHaveLength(0);
+    const map = { not_found: 404, not_resolvable: 409, no_agent_run: 422, no_policy: 422, order_not_ready: 422, exceeds_refundable: 422 } as const;
+    for (const [error, status] of Object.entries(map) as [keyof typeof map, number][]) {
+      const r = await setup({ manual: { ok: false, error } }).call("POST", "/cases/case-1/resolve", { action: "refund", remedy: "full_refund", amountMinor: 100 });
+      expect(r.status).toBe(status);
+    }
+  });
+
+  it("resolve requires the admin token", async () => {
+    const s = setup();
+    expect((await s.call("POST", "/cases/case-1/resolve", { action: "decline" }, null)).status).toBe(401);
+    expect(s.declined).toHaveLength(0);
   });
 });

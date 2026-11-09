@@ -10,7 +10,10 @@ function setup(opts: { open?: OpenResult; max?: number; run?: ((id: string) => P
   const opened: { orderId: string; message: string }[] = [];
   const ran: string[] = [];
   const delivered: [string, number][] = [];
+  const listed: (string | undefined)[] = [];
   const repo: CaseRepo = {
+    async list(status) { listed.push(status); return []; },
+    async decline() { return "declined"; },
     async open(orderId, message) { opened.push({ orderId, message }); return opts.open ?? { ok: true, caseId: "case-1" }; },
     async status(id) { return id === "case-1" ? ({ status: "denied", reason: "R7: secret rule detail" } as { status: string }) : undefined; },
     async timeline(id) { return id === "case-1" ? { case: { id }, runs: [], toolCalls: [], proposals: [], decisions: [], executions: [] } : undefined; },
@@ -23,7 +26,7 @@ function setup(opts: { open?: OpenResult; max?: number; run?: ((id: string) => P
   const post = (body: unknown) => app.request("/", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const adminCall = (method: string, path: string, body?: unknown, token: string | null = TOKEN) =>
     admin.request(path, { method, headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
-  return { app, post, adminCall, opened, ran, delivered, limiter };
+  return { app, post, adminCall, opened, ran, delivered, limiter, listed };
 }
 
 describe("case form (public)", () => {
@@ -102,6 +105,14 @@ describe("admin routes", () => {
   it("answer 503 when no token is configured", async () => {
     const res = await adminRoutes({ cases: setup().app as unknown as CaseRepo, adminToken: undefined }).request("/cases/x");
     expect(res.status).toBe(503);
+  });
+
+  it("list cases (admin only), optionally filtered by status", async () => {
+    const s = setup();
+    expect((await s.adminCall("GET", "/cases", undefined, null)).status).toBe(401);
+    expect(await (await s.adminCall("GET", "/cases")).json()).toEqual({ cases: [] });
+    await s.adminCall("GET", "/cases?status=NEEDS_HUMAN");
+    expect(s.listed).toEqual([undefined, "NEEDS_HUMAN"]);
   });
 
   it("serve the full timeline to an admin", async () => {

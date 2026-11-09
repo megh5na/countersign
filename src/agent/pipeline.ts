@@ -8,6 +8,7 @@ import type { Db } from "../db/client.js";
 import { createPolicyRepo } from "../db/policies.js";
 import { createApprovalRepo } from "../db/approvals.js";
 import { agentRuns, cases, decisions, orders, proposals, toolCalls } from "../db/schema.js";
+import { APPROVAL_TTL_MS } from "../exec/approved.js";
 import { executeRefund } from "../exec/executor.js";
 import { loadFacts } from "../exec/facts.js";
 import { describeResult } from "../exec/outcome.js";
@@ -18,8 +19,6 @@ import { policyHash } from "../policy/hash.js";
 import { Policy, movesMoney } from "../policy/schema.js";
 import { type AgentModel, runAgent } from "./agent.js";
 import { createAgentData } from "./data.js";
-
-export const APPROVAL_TTL_MS = 48 * 3_600_000;
 
 export interface PipelineDeps {
   db: Db;

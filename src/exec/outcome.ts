@@ -6,6 +6,7 @@ import type { ApprovalRepo } from "../db/approvals.js";
 import type { Db } from "../db/client.js";
 import { approvals, cases } from "../db/schema.js";
 import { executeApprovedRefund } from "./approved.js";
+import { minorToDecimal } from "../money.js";
 import type { ExecuteResult, ExecutorDeps } from "./executor.js";
 
 export type FinalStatus = "resolved" | "needs_approval" | "NEEDS_HUMAN";
@@ -13,7 +14,7 @@ export type FinalStatus = "resolved" | "needs_approval" | "NEEDS_HUMAN";
 export function describeResult(result: ExecuteResult, mode: "auto" | "approved", why = ""): { status: FinalStatus; reason: string } {
   switch (result.outcome) {
     case "refunded":
-      return { status: "resolved", reason: `refunded ${result.amountMinor} minor units (${result.refundId})${why ? `; ${why}` : ""}` };
+      return { status: "resolved", reason: `refunded $${minorToDecimal(result.amountMinor)} (${result.refundId})${why ? `; ${why}` : ""}` };
     case "not_allowed":
       return mode === "auto"
         ? { status: "needs_approval", reason: `executor re-check: ${result.reason}` } // state changed since the decision

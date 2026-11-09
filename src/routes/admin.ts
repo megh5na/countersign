@@ -23,6 +23,11 @@ export function requireAdmin(adminToken?: string): MiddlewareHandler {
 const Delivered = z.object({ daysAgo: z.number().int().min(0).max(365) });
 const Approve = z.object({ paramsHash: z.string().length(64), amountMinor: z.number().int().positive().max(10_000_000).optional() });
 const Reject = z.object({ paramsHash: z.string().length(64) });
+const Resolve = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("refund"), remedy: z.enum(["full_refund", "partial_tier_a", "partial_tier_b"]), amountMinor: z.number().int().positive().max(10_000_000) }),
+  z.object({ action: z.literal("decline") }),
+]);
+const RESOLVE_ERRORS = { not_found: 404, not_resolvable: 409, no_agent_run: 422, no_policy: 422, order_not_ready: 422, exceeds_refundable: 422 } as const;
 
 const APPROVE_ERRORS = { not_found: 404, not_pending: 409, expired: 410, hash_mismatch: 409, amount_required: 422, exceeds_refundable: 422, order_not_ready: 422 } as const;
 
@@ -37,10 +42,28 @@ export function adminRoutes({ cases, approvals, runApproved, adminToken }: Admin
   const app = new Hono();
   app.use("*", requireAdmin(adminToken));
 
+  app.get("/cases", async (c) => c.json({ cases: await cases.list(c.req.query("status") || undefined) }));
+
   // Full timeline: agent run, tool calls, proposal, decision (rule ids + context), execution.
   app.get("/cases/:id", async (c) => {
     const t = await cases.timeline(c.req.param("id"));
     return t ? c.json(t) : c.json({ error: "not_found" }, 404);
+  });
+
+  // Escalated (NEEDS_HUMAN) cases: the merchant either declines, or proposes a refund. A proposed refund becomes a
+  // normal pending approval (same hash, expiry, single-use and policy checks); the dashboard then confirms it.
+  app.post("/cases/:id/resolve", async (c) => {
+    const body = Resolve.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: "invalid_body", detail: 'send {"action":"decline"} or {"action":"refund","remedy":"partial_tier_a","amountMinor":1900}' }, 400);
+    const id = c.req.param("id");
+    if (body.data.action === "decline") {
+      const r = await cases.decline(id);
+      return r === "declined" ? c.json({ declined: true }) : c.json({ error: r }, r === "not_found" ? 404 : 409);
+    }
+    if (!approvals) return c.json({ error: "approvals_not_configured" }, 503);
+    const r = await approvals.createManual(id, { remedy: body.data.remedy, amountMinor: body.data.amountMinor });
+    if (!r.ok) return c.json({ error: r.error }, RESOLVE_ERRORS[r.error]);
+    return c.json({ approvalId: r.approvalId, paramsHash: r.paramsHash, amountMinor: r.amountMinor }, 201);
   });
 
   // Demo stand-in for shipment tracking: marks an order delivered N days ago so time-window rules can be exercised.
