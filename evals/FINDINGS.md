@@ -33,7 +33,7 @@ real agent and a scenario nobody had written a test for.
 ## 2. L10 was labelled wrongly (a mistake in the eval, not in the system)
 
 L10 is a damaged $75 order. 50% is $37.50, which is above the $30 per-buyer auto-refund limit, so the correct outcome is "needs
-approval", and that is what the engine did. My first label expected an automatic $37.50 refund. The label was corrected and a comment
+approval", and that is what the engine did. The first label expected an automatic $37.50 refund. The label was corrected and a comment
 left in `evals/cases.ts`.
 
 ## 3. What did not go wrong (and why not to over-read it)

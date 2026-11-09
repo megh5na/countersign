@@ -11,6 +11,7 @@ import { createAnthropicAgentModel } from "./agent/model.js";
 import { processCase } from "./agent/pipeline.js";
 import { createApprovalRepo } from "./db/approvals.js";
 import { createCaseRepo } from "./db/cases.js";
+import { createDemoRepo } from "./db/demo.js";
 import { createPolicyRepo } from "./db/policies.js";
 import { createOrderRepo, createWebhookRepo } from "./db/repos.js";
 import { compilePolicy } from "./policy/compiler.js";
@@ -45,7 +46,9 @@ const app = createApp({
     repo: createPolicyRepo(db),
     compile: config.ANTHROPIC_API_KEY ? (prose) => compilePolicy(prose, createAnthropicPolicyLlm(config.ANTHROPIC_API_KEY as string)) : undefined,
     adminToken: config.ADMIN_TOKEN,
+    judgeToken: config.JUDGE_TOKEN,
   },
+  demo: { repo: createDemoRepo(db), resetEnabled: config.ALLOW_DEMO_RESET },
   clientId: config.PAYPAL_CLIENT_ID,
   env: config.PAYPAL_ENV,
   trustProxy: config.TRUST_PROXY,

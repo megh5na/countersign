@@ -7,15 +7,27 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { ApprovalRepo } from "../db/approvals.js";
 import type { CaseRepo } from "../db/cases.js";
+import type { DemoRepo } from "../db/demo.js";
 
 const digest = (s: string) => createHash("sha256").update(s).digest();
 
-export function requireAdmin(adminToken?: string): MiddlewareHandler {
+export type Role = "admin" | "judge";
+export type AuthEnv = { Variables: { role: Role } };
+
+// Two secrets: the admin token can do everything; the optional judge token is read-only. The read-only rule lives here,
+// in the guard, so no route can forget it: a judge gets 403 on anything except GET/HEAD.
+export function requireAdmin(adminToken?: string, judgeToken?: string): MiddlewareHandler<AuthEnv> {
   return async (c, next) => {
     if (!adminToken) return c.json({ error: "admin_not_configured" }, 503);
     const h = c.req.header("authorization");
-    const given = h?.startsWith("Bearer ") ? h.slice(7) : "";
-    if (!timingSafeEqual(digest(given), digest(adminToken))) return c.json({ error: "unauthorized" }, 401); // fixed-length digests: constant time
+    const given = digest(h?.startsWith("Bearer ") ? h.slice(7) : "");
+    // Fixed-length digests, and both comparisons always run, so timing reveals nothing about either token.
+    const isAdmin = timingSafeEqual(given, digest(adminToken));
+    const isJudge = judgeToken ? timingSafeEqual(given, digest(judgeToken)) : false;
+    if (!isAdmin && !isJudge) return c.json({ error: "unauthorized" }, 401);
+    const role: Role = isAdmin ? "admin" : "judge";
+    if (role === "judge" && c.req.method !== "GET" && c.req.method !== "HEAD") return c.json({ error: "read_only" }, 403);
+    c.set("role", role);
     await next();
   };
 }
@@ -36,11 +48,29 @@ interface AdminDeps {
   approvals?: ApprovalRepo;
   runApproved?: (approvalId: string) => Promise<{ status: string; reason: string }>; // executes an approved refund
   adminToken?: string;
+  judgeToken?: string; // read-only access for reviewers
+  demo?: DemoRepo; // wipes demo data; only usable when resetEnabled is true
+  resetEnabled?: boolean;
 }
 
-export function adminRoutes({ cases, approvals, runApproved, adminToken }: AdminDeps) {
-  const app = new Hono();
-  app.use("*", requireAdmin(adminToken));
+const ResetBody = z.object({ confirm: z.literal("reset demo data") });
+
+export function adminRoutes({ cases, approvals, runApproved, adminToken, judgeToken, demo, resetEnabled }: AdminDeps) {
+  const app = new Hono<AuthEnv>();
+  app.use("*", requireAdmin(adminToken, judgeToken));
+
+  // Lets the console know who is signed in, so it can hide the buttons a judge cannot use.
+  app.get("/whoami", (c) => c.json({ role: c.get("role"), resetEnabled: Boolean(resetEnabled && demo) }));
+
+  // Clears demo data (cases, approvals, refunds, orders, webhook events) but keeps every policy version.
+  // Off unless ALLOW_DEMO_RESET=true, admin only (the guard already refuses a judge's POST), and needs a typed phrase.
+  app.post("/reset", async (c) => {
+    if (!resetEnabled || !demo) return c.json({ error: "reset_disabled" }, 403);
+    const body = ResetBody.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: "invalid_body", detail: 'send {"confirm": "reset demo data"}' }, 400);
+    const r = await demo.reset();
+    return r.ok ? c.json({ reset: true, deleted: r.deleted }) : c.json({ error: r.error, detail: "a refund is still in flight; wait for it to settle first" }, 409);
+  });
 
   app.get("/cases", async (c) => c.json({ cases: await cases.list(c.req.query("status") || undefined) }));
 

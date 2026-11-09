@@ -6,6 +6,7 @@ import type { OrderRepo, WebhookRepo } from "./db/repos.js";
 import type { PayPalClient } from "./paypal/client.js";
 import type { ApprovalRepo } from "./db/approvals.js";
 import type { CaseRepo } from "./db/cases.js";
+import type { DemoRepo } from "./db/demo.js";
 import type { PolicyRepo } from "./db/policies.js";
 import type { CompileReport } from "./policy/compiler.js";
 import { clientIp, createRateLimiter, limit } from "./http/rateLimit.js";
@@ -23,7 +24,8 @@ export interface AppDeps {
   webhookId?: string;
   cases: { repo: CaseRepo; run?: (caseId: string) => Promise<unknown> };
   approvals: { repo: ApprovalRepo; run?: (approvalId: string) => Promise<{ status: string; reason: string }> };
-  policies: { repo: PolicyRepo; compile?: (prose: string) => Promise<CompileReport>; adminToken?: string };
+  policies: { repo: PolicyRepo; compile?: (prose: string) => Promise<CompileReport>; adminToken?: string; judgeToken?: string };
+  demo?: { repo: DemoRepo; resetEnabled: boolean };
   clientId: string; // safe for the browser; the secret never leaves the server
   env: string;
   trustProxy?: boolean; // true only behind a proxy we control; decides where rate limits read the client address
@@ -54,7 +56,7 @@ export function createApp(deps: AppDeps) {
   app.route("/api", storeRoutes({ paypal: deps.paypal, orders: deps.orders }));
   app.route("/api/policies", policyRoutes(deps.policies));
   app.route("/api/cases", caseRoutes({ cases: deps.cases.repo, run: deps.cases.run }));
-  app.route("/api/admin", adminRoutes({ cases: deps.cases.repo, approvals: deps.approvals.repo, runApproved: deps.approvals.run, adminToken: deps.policies.adminToken }));
+  app.route("/api/admin", adminRoutes({ cases: deps.cases.repo, approvals: deps.approvals.repo, runApproved: deps.approvals.run, adminToken: deps.policies.adminToken, judgeToken: deps.policies.judgeToken, demo: deps.demo?.repo, resetEnabled: deps.demo?.resetEnabled }));
   app.route("/webhooks/paypal", webhookRoutes({ paypal: deps.paypal, repo: deps.webhooks, webhookId: deps.webhookId }));
 
   app.use("/*", serveStatic({ root: "./public" })); // demo store; must stay last

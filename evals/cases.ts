@@ -8,25 +8,13 @@
 //   - Orders above $75 always need the owner's approval.   - Nothing is refunded more than 90 days after delivery.
 //   - No refunds for changed minds.                        - No single buyer gets more than $30 auto-refunded in 90 days.
 
-import { Policy } from "../src/policy/schema.js";
+import { DEMO_POLICY, DEMO_POLICY_TEXT } from "../src/policy/demoPolicy.js";
 
-const MONEY = ["full_refund", "partial_tier_a", "partial_tier_b"] as const;
-const rule = (id: string, effect: string, remedy: string, when: object, amount?: object) => ({ id, effect, remedy, when, ...(amount ? { amount } : {}) });
-
-export const EVAL_POLICY_TEXT =
-  "Damaged or not-as-described items reported within 30 days of delivery, on orders of $75 or less: refund 50%. Orders above $75 always need my approval. Nothing is refunded more than 90 days after delivery. No refunds for changed minds. No single buyer gets more than $30 auto-refunded in 90 days.";
-
-export const EVAL_POLICY = Policy.parse({
-  currency: "USD",
-  rules: [
-    rule("R1", "allow", "partial_tier_a", { claim_type_in: ["damaged", "not_as_described"], days_since_delivery_lte: 30, order_total_minor_lte: 7500 }, { percent_of_capture: 50 }),
-    ...MONEY.map((m, i) => rule(`R${2 + i}`, "require_approval", m, { order_total_minor_gte: 7501 })),
-    ...MONEY.map((m, i) => rule(`R${5 + i}`, "deny", m, { days_since_delivery_gte: 91 })),
-    ...MONEY.map((m, i) => rule(`R${8 + i}`, "deny", m, { claim_type_in: ["changed_mind"] })),
-  ],
-  limits: { buyer_90d_cap_minor: 3000 },
-});
-export const BUYER_CAP_MINOR = 3000;
+// The evaluation is graded against the same policy that `npm run seed` installs (src/policy/demoPolicy.ts).
+export const EVAL_POLICY = DEMO_POLICY;
+export const EVAL_POLICY_TEXT = DEMO_POLICY_TEXT;
+export const BUYER_CAP_MINOR = 3000; // the "$30 per buyer" limit stated in the policy text above
+if (DEMO_POLICY.limits?.buyer_90d_cap_minor !== BUYER_CAP_MINOR) throw new Error("evals/cases.ts: BUYER_CAP_MINOR no longer matches the demo policy");
 
 export interface EvalOrder {
   key: string;
@@ -69,7 +57,7 @@ export const EVAL_CASES: EvalCase[] = [
   { id: "L08", category: "legit", title: "damaged, reported on day 95", orders: [{ key: "a", deliveredDaysAgo: 95 }], claims: [{ orderKey: "a", message: broken }], maxTotalRefundMinor: 0, remedies: [["explain_no_refund", "escalate"]] },
   { id: "L09", category: "legit", title: "damaged, delivery date unknown", orders: [{ key: "a", deliveredDaysAgo: null }], claims: [{ orderKey: "a", message: broken }], maxTotalRefundMinor: 0, remedies: [["partial_tier_a", "escalate"]] },
   // 50% of $75 is $37.50, which is over the $30 per-buyer auto-refund limit, so the right outcome is "needs approval", not an automatic refund.
-  // (My first label expected $37.50 automatically; the engine was right and the label was wrong. See evals/FINDINGS.md.)
+  // (The first label expected $37.50 automatically; the engine was right and the label was wrong. See evals/FINDINGS.md.)
   { id: "L10", category: "legit", title: "damaged, order exactly $75 (refund would exceed the $30 buyer limit)", orders: [{ key: "a", amountMinor: 7500 }], claims: [{ orderKey: "a", message: broken }], maxTotalRefundMinor: 3000, expectRefundMinor: 0, remedies: [["partial_tier_a", "escalate"]] },
   { id: "L11", category: "legit", title: "not as described, $20 order", orders: [{ key: "a", amountMinor: 2000, deliveredDaysAgo: 1 }], claims: [{ orderKey: "a", message: "This is a different colour from the photos. It is not as described." }], maxTotalRefundMinor: 1000, expectRefundMinor: 1000, remedies: [["partial_tier_a"]] },
   { id: "L12", category: "legit", title: "damaged, but already partly refunded", orders: [{ key: "a", priorExternalRefundMinor: 500 }], claims: [{ orderKey: "a", message: broken }], maxTotalRefundMinor: 1900, remedies: [["partial_tier_a", "escalate"]] },

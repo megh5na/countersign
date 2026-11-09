@@ -57,6 +57,17 @@ const ERRORS = {
   no_policy: "No policy is active.",
   invalid_body: "Check the values and try again.",
   admin_not_configured: "Admin access is not configured on this server.",
+  invalid_prose: "Write between 20 and 8000 characters.",
+  compile_failed: "The AI compiler could not be reached. Try again in a moment.",
+  compile_invalid: "The compiled policy was not valid, so nothing was saved. Try rewording it.",
+  compiler_not_configured: "The AI compiler is not configured on this server.",
+  not_a_draft: "Only a draft version can be activated.",
+  not_activatable: "The generated tests disagree with the rules, so this version cannot be activated. Reword the policy and compile again.",
+  confirmation_required: "Confirmation is required.",
+  rate_limited: "Too many requests. Wait a moment and try again.",
+  read_only: "This is read-only access. Only the merchant can do that.",
+  reset_disabled: "Demo reset is switched off on this server.",
+  payments_in_flight: "A refund is still being processed. Wait a moment and try again.",
 };
 const STATUS = {
   open: ["Received", ""], processing: ["Reviewing", ""], needs_approval: ["Needs approval", "warn"], resolved: ["Resolved", "ok"],
@@ -113,6 +124,8 @@ function twoStep(label, cls, action) {
 // ---------- login ----------
 function signOut(message) {
   setToken(null);
+  role = "admin"; resetEnabled = false; // the next sign-in asks the server who it is
+  clearInterval(timer);
   tabsEl.hidden = true; signoutBtn.hidden = true; badge.hidden = true;
   renderLogin(message);
 }
@@ -141,8 +154,14 @@ function renderLogin(message) {
 // ---------- shell and tabs ----------
 let currentTab = "approvals";
 let timer = null;
-function start() {
+let role = "admin"; // "judge" is read-only: the server refuses every write, and the console hides the buttons
+let resetEnabled = false;
+async function start() {
   tabsEl.hidden = false; signoutBtn.hidden = false;
+  try {
+    const w = await api("/api/admin/whoami");
+    if (w.ok) { role = w.body.role === "judge" ? "judge" : "admin"; resetEnabled = Boolean(w.body.resetEnabled); }
+  } catch (e) { if (e instanceof AuthError) return; }
   show(currentTab);
   clearInterval(timer);
   timer = setInterval(() => { if (document.visibilityState === "visible" && getToken()) updateBadge(); }, 15000);
@@ -153,7 +172,9 @@ function show(tab) {
   currentTab = tab;
   for (const b of tabsEl.querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
   flash("");
-  app.replaceChildren(flashEl, h("div", { id: "view" }, h("p", { class: "muted" }, "Loading…")));
+  app.replaceChildren(
+    role === "judge" ? h("div", { class: "banner okmsg" }, "Read-only access. You can look at everything, but only the merchant can approve, refund, resolve cases or change the policy.") : null,
+    flashEl, h("div", { id: "view" }, h("p", { class: "muted" }, "Loading…")));
   const view = document.getElementById("view");
   const run = { approvals: approvalsView, cases: casesView, policy: policyView }[tab];
   run(view).catch((e) => { if (!(e instanceof AuthError)) view.replaceChildren(h("div", { class: "banner err" }, "Could not load this view. Is the server reachable?")); });
@@ -216,12 +237,34 @@ function approvalCard(a, reload) {
     reasons.length ? h("ul", { class: "plain" }, reasons.map((r) => h("li", null, String(r)))) : h("span", { class: "muted" }, "No rule covered this proposal."),
     h("h3", null, "The buyer wrote"), h("blockquote", null, a.buyerMessage),
     h("h3", null, "Suggested reply (not sent automatically)"), h("blockquote", { class: "draft" }, a.agentDraft),
-    pending
+    pending && role === "admin"
       ? h("div", { class: "row", style: "margin-top:12px" },
           h("label", null, h("span", { class: "muted" }, "Refund amount  "), h("span", null, "$"), amount),
           a.suggestedAmountMinor == null ? h("span", { class: "muted" }, "No suggestion: enter an amount") : h("span", { class: "muted" }, "Suggested " + fmt(a.suggestedAmountMinor)),
           h("div", { class: "spacer" }), reject, approve)
       : h("div", { class: "row", style: "margin-top:8px" }, h("span", { class: "amount" }, fmt(a.suggestedAmountMinor))));
+}
+
+// Only shown to the admin, and only when the server has ALLOW_DEMO_RESET=true. The button stays disabled until the exact phrase is typed.
+function demoTools(reload) {
+  if (role !== "admin" || !resetEnabled) return "";
+  const PHRASE = "reset demo data";
+  const input = h("input", { type: "text", placeholder: PHRASE, autocomplete: "off", "aria-label": "Type the phrase to confirm the reset", style: "width:220px" });
+  const btn = h("button", { class: "btn danger", type: "button", disabled: true }, "Reset demo data");
+  input.addEventListener("input", () => { btn.disabled = input.value !== PHRASE; });
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const r = await api("/api/admin/reset", { method: "POST", body: { confirm: input.value } });
+    if (r.ok) {
+      const d = r.body.deleted || {};
+      flash(`Demo data cleared (${d.cases ?? 0} cases, ${d.orders ?? 0} orders, ${d.refundLedger ?? 0} refunds). Policies were kept.`, "okmsg");
+      input.value = "";
+      await reload();
+    } else { flash(errText(r), "err"); btn.disabled = input.value !== PHRASE; }
+  });
+  return h("div", { class: "card", style: "margin-top:24px" }, h("h3", { style: "margin-top:0" }, "Demo tools"),
+    h("p", { class: "muted" }, "Clears every case, approval, refund, order and webhook event so the demo can start fresh. Policies are kept. This cannot be undone. Type \"" + PHRASE + "\" to enable the button."),
+    h("div", { class: "row" }, input, btn));
 }
 
 // ---------- cases ----------
@@ -230,7 +273,7 @@ async function casesView(view) {
   const body = h("div");
   const select = h("select", { "aria-label": "Filter by status" }, [["", "All cases"], ["NEEDS_HUMAN", "Needs you"], ["needs_approval", "Needs approval"], ["resolved", "Resolved"], ["denied", "Denied"], ["processing", "Reviewing"], ["error", "Error"]].map(([v, t]) => h("option", { value: v }, t)));
   select.addEventListener("change", () => { status = select.value; load(); });
-  view.replaceChildren(h("div", { class: "row", style: "margin-bottom:12px" }, h("h2", { style: "margin:0" }, "Cases"), h("div", { class: "spacer" }), select, h("button", { class: "btn", type: "button", onclick: () => load() }, "Refresh")), body);
+  view.replaceChildren(h("div", { class: "row", style: "margin-bottom:12px" }, h("h2", { style: "margin:0" }, "Cases"), h("div", { class: "spacer" }), select, h("button", { class: "btn", type: "button", onclick: () => load() }, "Refresh")), body, demoTools(() => load()));
 
   async function load() {
     const r = await api("/api/admin/cases" + (status ? "?status=" + encodeURIComponent(status) : ""));
@@ -298,6 +341,7 @@ function timeline(t, reload) {
 
 // Escalated cases: propose a refund (becomes a normal approval that must be confirmed) or decline.
 function resolveForm(c, reload) {
+  if (role !== "admin") return h("div", { class: "muted", style: "margin-top:16px" }, "This case is waiting for the merchant. Read-only access cannot resolve it.");
   const remedy = h("select", { "aria-label": "Refund type" }, ["partial_tier_a", "partial_tier_b", "full_refund"].map((r) => h("option", { value: r }, REMEDY[r])));
   const amount = h("input", { class: "money", type: "text", inputmode: "decimal", placeholder: "0.00", "aria-label": "Refund amount in dollars" });
   const out = h("div");
@@ -340,29 +384,121 @@ function conditions(w) {
   return out.length ? out.join(", and ") : "always";
 }
 
+function ruleCards(rules) {
+  if (rules.length === 0) return [h("div", { class: "muted" }, "No rules: every proposal needs your approval.")];
+  return rules.map((r) => {
+    const [t, k] = EFFECT[r.effect] || [r.effect, ""];
+    return h("div", { class: "rule" }, h("div", null, h("strong", null, r.id)),
+      h("div", null, h("div", { class: "row" }, chip(t, k), h("strong", null, REMEDY[r.remedy] || r.remedy)),
+        h("div", { class: "muted" }, "When " + conditions(r.when || {})),
+        r.amount ? h("div", null, r.amount.percent_of_capture != null ? `Refund ${r.amount.percent_of_capture}% of the payment` : `Refund ${fmt(r.amount.fixed_minor)}`) : ""));
+  });
+}
+
+function limitsBlock(limits) {
+  return h("div", null,
+    limits.daily_auto_refund_cap_minor != null ? h("div", null, "Auto-approved refunds per day: up to " + fmt(limits.daily_auto_refund_cap_minor)) : h("div", { class: "muted" }, "No daily cap"),
+    limits.buyer_90d_cap_minor != null ? h("div", null, "Auto-approved refunds per buyer, 90 days: up to " + fmt(limits.buyer_90d_cap_minor)) : h("div", { class: "muted" }, "No per-buyer cap"),
+    h("p", { class: "muted" }, "Anything not covered by a rule, or over a limit, waits for your approval. Nothing is ever refunded by guesswork."));
+}
+
+// One shape for both a fresh compile response and a stored draft row.
+function reviewModel(src) {
+  const report = src.report || {}, spec = src.policy || src.rulesJson || {};
+  return {
+    id: src.id, version: src.version, status: src.status, rulesHash: src.rulesHash, sourceText: src.sourceText || "",
+    rules: spec.rules || [], limits: spec.limits || {}, cases: report.cases || [], warnings: report.warnings || [],
+    ambiguities: report.ambiguities || [], unsupported: report.unsupported || [], activatable: report.activatable === true,
+  };
+}
+
+const bullets = (items) => h("ul", { class: "plain" }, items.map((x) => h("li", null, String(x))));
+const outcome = (o) => [decisionChip(o.decision), o.amountMinor != null ? " " + fmt(o.amountMinor) : ""];
+
+// Review a draft: how it was understood, what the assistant was unsure about, and the generated tests run through the real engine.
+function reviewPanel(v, onActivated) {
+  const needsAck = v.unsupported.length > 0 || v.ambiguities.length > 0;
+  const ack = h("input", { type: "checkbox", "aria-label": "I have read the notes above" });
+  const activate = twoStep("Activate version " + v.version, "primary", async () => {
+    if (needsAck && !ack.checked) return flash("Tick the box to confirm you have read the notes above.", "err");
+    const r = await api("/api/policies/" + encodeURIComponent(v.id) + "/activate", { method: "POST", body: { confirm: true, rulesHash: v.rulesHash } });
+    if (r.ok) { flash(`Version ${v.version} is now the active policy. New claims use it immediately.`, "okmsg"); await onActivated(); }
+    else flash(errText(r), "err");
+  });
+  const passed = v.cases.filter((c) => c.pass).length;
+  const canActivate = v.status === "draft" && v.activatable && role === "admin";
+  const testRows = v.cases.map((c) => h("tr", null,
+    h("td", null, c.name), h("td", null, outcome(c.expected)),
+    h("td", null, outcome(c.actual), h("div", { class: "muted" }, Array.isArray(c.actual.ruleIds) ? c.actual.ruleIds.join(", ") : "")),
+    h("td", null, chip(c.pass ? "agree" : "DISAGREE", c.pass ? "ok" : "bad"))));
+  return h("div", { class: "card", style: "margin-top:12px" },
+    h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Review · version " + v.version), chip(v.status, v.status === "active" ? "ok" : ""),
+      v.cases.length ? chip(passed === v.cases.length ? `All ${v.cases.length} tests agree` : `${v.cases.length - passed} of ${v.cases.length} tests disagree`, passed === v.cases.length ? "ok" : "bad") : chip("no tests on record", "warn"),
+      h("span", { class: "muted" }, "fingerprint " + String(v.rulesHash).slice(0, 12))),
+    v.sourceText ? [h("h3", null, "What you wrote"), h("blockquote", null, v.sourceText)] : "",
+    v.unsupported.length ? [h("h3", null, "Not enforced: the rule language cannot express these"), bullets(v.unsupported)] : "",
+    v.ambiguities.length ? [h("h3", null, "Where the assistant had to guess"), bullets(v.ambiguities)] : "",
+    v.warnings.length ? [h("h3", null, "Warnings"), bullets(v.warnings)] : "",
+    h("h3", null, "How it was understood"), ...ruleCards(v.rules), limitsBlock(v.limits),
+    h("h3", null, "Tests the assistant wrote from your text, run through the real rule engine"),
+    v.cases.length ? h("table", null, h("thead", null, h("tr", null, ["Scenario", "You expect", "The engine says", ""].map((x) => h("th", null, x)))), h("tbody", null, testRows)) : h("div", { class: "muted" }, "No generated tests are stored for this version."),
+    canActivate
+      ? h("div", { class: "row", style: "margin-top:16px" }, needsAck ? h("label", { class: "row" }, ack, h("span", null, "I have read the notes above")) : "", h("div", { class: "spacer" }), activate)
+      : h("p", { class: "muted", style: "margin-top:16px" }, role !== "admin" ? "Read-only access: only the merchant can activate a policy." : v.status !== "draft" ? "Only a draft version can be activated." : "This version cannot be activated: its tests disagree with its rules, or none were generated. Reword the policy and compile again."));
+}
+
+// Paste a policy in plain English; Claude drafts rules and tests; nothing changes until a human activates the reviewed draft.
+function composePanel(onActivated) {
+  const ta = h("textarea", { rows: "7", maxlength: "8000", style: "width:100%", "aria-label": "Refund policy in plain English",
+    placeholder: "Describe your refund policy in plain English, for example: We refund 50% of damaged items reported within 30 days of delivery. Orders above $75 always need my approval. Nothing is refunded after 90 days." });
+  const out = h("div");
+  const go = h("button", { class: "btn primary", type: "button" }, "Compile and review");
+  go.addEventListener("click", async () => {
+    const prose = ta.value.trim();
+    if (prose.length < 20) return out.replaceChildren(h("div", { class: "banner err" }, ERRORS.invalid_prose));
+    go.disabled = true;
+    out.replaceChildren(h("p", { class: "muted", role: "status" }, "Compiling with Claude, then testing the result against the rule engine. This takes up to a minute…"));
+    try {
+      const r = await api("/api/policies/compile", { method: "POST", body: { prose } });
+      if (r.status === 201) out.replaceChildren(reviewPanel(reviewModel({ ...r.body, sourceText: prose }), onActivated));
+      else if (r.status === 422) out.replaceChildren(h("div", { class: "banner err" }, ERRORS.compile_invalid, Array.isArray(r.body && r.body.schemaErrors) ? bullets(r.body.schemaErrors) : ""));
+      else out.replaceChildren(h("div", { class: "banner err" }, errText(r)));
+    } catch (e) { if (!(e instanceof AuthError)) out.replaceChildren(h("div", { class: "banner err" }, "Could not reach the server.")); }
+    finally { go.disabled = false; }
+  });
+  return h("details", { class: "card" },
+    h("summary", null, h("strong", null, "Write a new policy version")),
+    h("p", { class: "muted" }, "Nothing changes until you review the result and activate it."), ta, h("div", { style: "margin-top:12px" }, go), out);
+}
+
 async function policyView(view) {
+  const reload = () => policyView(view);
   const [active, all] = await Promise.all([api("/api/policies/active"), api("/api/policies")]);
-  if (active.status === 404) return view.replaceChildren(h("div", { class: "empty" }, "No policy is active yet. Compile and activate one through the API (see the README)."));
-  if (!active.ok) return view.replaceChildren(h("div", { class: "banner err" }, errText(active)));
-  const p = active.body, rules = (p.rulesJson && p.rulesJson.rules) || [], limits = (p.rulesJson && p.rulesJson.limits) || {};
-  const parts = [
-    h("div", { class: "card" },
-      h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Active policy · version " + p.version), chip("active", "ok"), h("span", { class: "muted" }, "fingerprint " + String(p.rulesHash).slice(0, 12))),
-      h("h3", null, "What you wrote"), h("blockquote", null, p.sourceText)),
-    h("div", { class: "card" }, h("h2", null, "How it was understood"),
-      ...rules.map((r) => { const [t, k] = EFFECT[r.effect] || [r.effect, ""];
-        return h("div", { class: "rule" }, h("div", null, h("strong", null, r.id)),
-          h("div", null, h("div", { class: "row" }, chip(t, k), h("strong", null, REMEDY[r.remedy] || r.remedy)),
-            h("div", { class: "muted" }, "When " + conditions(r.when || {})),
-            r.amount ? h("div", null, r.amount.percent_of_capture != null ? `Refund ${r.amount.percent_of_capture}% of the payment` : `Refund ${fmt(r.amount.fixed_minor)}`) : "")); }),
-      rules.length === 0 ? h("div", { class: "muted" }, "No rules: every proposal needs your approval.") : ""),
-    h("div", { class: "card" }, h("h2", null, "Limits"),
-      limits.daily_auto_refund_cap_minor != null ? h("div", null, "Auto-approved refunds per day: up to " + fmt(limits.daily_auto_refund_cap_minor)) : h("div", { class: "muted" }, "No daily cap"),
-      limits.buyer_90d_cap_minor != null ? h("div", null, "Auto-approved refunds per buyer, 90 days: up to " + fmt(limits.buyer_90d_cap_minor)) : h("div", { class: "muted" }, "No per-buyer cap"),
-      h("p", { class: "muted" }, "Anything not covered above, or over a limit, waits for your approval. Nothing is ever refunded by guesswork.")),
-  ];
-  if (all.ok && all.body.policies.length > 1) {
-    parts.push(h("div", { class: "card" }, h("h2", null, "Versions"), ...all.body.policies.map((v) => h("div", { class: "row" }, h("strong", null, "v" + v.version), chip(v.status, v.status === "active" ? "ok" : ""), h("span", { class: "muted" }, relTime(v.createdAt))))));
+  const parts = role === "admin" ? [composePanel(reload)] : [];
+  const slot = h("div"); // where a reviewed older version appears
+
+  if (active.status === 404) parts.push(h("div", { class: "empty" }, "No policy is active yet. Write one above, review it, and activate it."));
+  else if (!active.ok) parts.push(h("div", { class: "banner err" }, errText(active)));
+  else {
+    const p = active.body, spec = p.rulesJson || {};
+    parts.push(
+      h("div", { class: "card" },
+        h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Active policy · version " + p.version), chip("active", "ok"), h("span", { class: "muted" }, "fingerprint " + String(p.rulesHash).slice(0, 12))),
+        h("h3", null, "What you wrote"), h("blockquote", null, p.sourceText)),
+      h("div", { class: "card" }, h("h2", null, "How it was understood"), ...ruleCards(spec.rules || [])),
+      h("div", { class: "card" }, h("h2", null, "Limits"), limitsBlock(spec.limits || {})));
+  }
+
+  if (all.ok && all.body.policies.length > 0) {
+    const review = async (id) => {
+      const r = await api("/api/policies/" + encodeURIComponent(id));
+      slot.replaceChildren(r.ok ? reviewPanel(reviewModel(r.body), reload) : h("div", { class: "banner err" }, errText(r)));
+      slot.scrollIntoView({ block: "nearest" });
+    };
+    parts.push(h("div", { class: "card" }, h("h2", null, "Versions"),
+      ...all.body.policies.map((v) => h("div", { class: "row", style: "padding:4px 0" },
+        h("strong", null, "v" + v.version), chip(v.status, v.status === "active" ? "ok" : ""), h("span", { class: "muted" }, relTime(v.createdAt)),
+        h("div", { class: "spacer" }), h("button", { class: "btn", type: "button", onclick: () => review(v.id) }, v.status === "draft" && role === "admin" ? "Review and activate" : "View"))), slot));
   }
   view.replaceChildren(...parts);
 }

@@ -5,12 +5,13 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { PolicyRepo } from "../db/policies.js";
 import type { CompileReport } from "../policy/compiler.js";
-import { requireAdmin } from "./admin.js";
+import { type AuthEnv, requireAdmin } from "./admin.js";
 
 interface Deps {
   repo: PolicyRepo;
   compile?: (prose: string) => Promise<CompileReport>; // undefined when ANTHROPIC_API_KEY is not set
   adminToken?: string;
+  judgeToken?: string; // read-only: may list and view policies, cannot compile or activate
 }
 
 const CompileBody = z.object({ prose: z.string().trim().min(20).max(8000) });
@@ -22,10 +23,10 @@ const reportOf = (r: CompileReport) => ({
   ambiguities: r.ambiguities, unsupported: r.unsupported, activatable: r.activatable, attempts: r.attempts,
 });
 
-export function policyRoutes({ repo, compile, adminToken }: Deps) {
-  const app = new Hono();
+export function policyRoutes({ repo, compile, adminToken, judgeToken }: Deps) {
+  const app = new Hono<AuthEnv>();
 
-  app.use("*", requireAdmin(adminToken));
+  app.use("*", requireAdmin(adminToken, judgeToken));
 
   app.post("/compile", async (c) => {
     if (!compile) return c.json({ error: "compiler_not_configured" }, 503);
