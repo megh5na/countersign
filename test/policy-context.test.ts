@@ -39,19 +39,35 @@ describe("context builder", () => {
     expect(ctx.refundsTodayMinor).toBe(1000);
   });
 
-  it("uses a 90-day window for buyer history, boundary inclusive, future rows excluded", () => {
+  it("uses a 90-day window for buyer history, boundary inclusive", () => {
     const ctx = buildContext(
       facts({
         buyerRefunds: [
           { amountMinor: 100, createdAt: daysAgo(90), origin: "countersign" }, // exactly 90d: in
           { amountMinor: 200, createdAt: new Date(daysAgo(90).getTime() - 1), origin: "external" }, // just outside
           { amountMinor: 400, createdAt: daysAgo(5), origin: "external" },
-          { amountMinor: 800, createdAt: new Date(NOW.getTime() + 1000), origin: "external" }, // clock skew / bad data
         ],
       }),
     );
     expect(ctx.buyerRefunds90dCount).toBe(2);
     expect(ctx.buyerRefunds90dMinor).toBe(500);
+  });
+
+  // REGRESSION (found by eval S05): a refund reserved a moment after this claim's "now" was read (another claim running
+  // at the same time, or a skewed clock) was treated as "in the future" and ignored, so the per-buyer cap could be
+  // exceeded. Counting too much only sends a case to approval; counting too little pays money. Never ignore it.
+  it("never hides a refund because its timestamp is later than 'now'", () => {
+    const ctx = buildContext(
+      facts({
+        buyerRefunds: [
+          { amountMinor: 400, createdAt: daysAgo(5), origin: "external" },
+          { amountMinor: 800, createdAt: new Date(NOW.getTime() + 1000), origin: "countersign" }, // reserved just after our clock was read
+          { amountMinor: 1600, createdAt: new Date(NOW.getTime() + 3_600_000), origin: "countersign" }, // even a badly skewed clock
+        ],
+      }),
+    );
+    expect(ctx.buyerRefunds90dCount).toBe(3);
+    expect(ctx.buyerRefunds90dMinor).toBe(2800);
   });
 
   it("counts whole days since delivery, and reports unknown as null", () => {

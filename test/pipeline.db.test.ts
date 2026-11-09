@@ -270,4 +270,43 @@ describe.skipIf(!dbTestsEnabled)("case pipeline on real Postgres", { timeout: 18
     expect((t.toolCalls as unknown[]).length).toBe(2);
     expect((t.executions as unknown[]).length).toBe(1);
   });
+
+  describe("daily AI spend cap", () => {
+    // Puts a finished agent run in the database so that "today's spend" has a known size.
+    async function seedSpend(tokensIn: number, tokensOut: number, when = "now()") {
+      const paypalOrderId = await seedOrder();
+      const caseId = await openCase(paypalOrderId);
+      await db.update(cases).set({ status: "resolved" }).where(eq(cases.id, caseId));
+      await client.unsafe(`insert into agent_runs (id, case_id, model, tokens_in, tokens_out, transcript_json, created_at) values (${lit(randomUUID())}, ${lit(caseId)}, 'test', ${tokensIn}, ${tokensOut}, '[]'::jsonb, ${when});`);
+    }
+
+    it("estimates spend from tokens at Sonnet 5.5 prices ($2 in, $10 out per million) and ignores earlier days", async () => {
+      const { modelSpendTodayUsd } = await import("../src/agent/pipeline.js");
+      expect(await modelSpendTodayUsd(db, new Date())).toBe(0);
+      await seedSpend(1_000_000, 100_000);
+      await seedSpend(50_000_000, 0, "now() - interval '2 days'"); // not today: must not count
+      expect(await modelSpendTodayUsd(db, new Date())).toBeCloseTo(3, 6); // 1M*2/M + 0.1M*10/M
+    });
+
+    it("once the cap is reached a new case waits for a human and the model is never called", async () => {
+      await activate();
+      await seedSpend(1_000_000, 100_000); // $3.00 spent today
+      const caseId = await openCase(await seedOrder());
+      const s = scripted(...investigate(), turn([propose()]));
+      const r = await processCase({ ...deps(s.model, fakePaypal()), dailyCapUsd: 3 }, caseId);
+      expect(r).toMatchObject({ status: "NEEDS_HUMAN" });
+      expect(r.reason).toMatch(/daily AI spend cap reached \(\$3\.00 of \$3\.00\)/);
+      expect(s.calls.n).toBe(0);
+      expect(await db.select().from(proposals)).toHaveLength(0);
+    });
+
+    it("under the cap the case runs normally; with no cap configured nothing is checked", async () => {
+      await activate();
+      await seedSpend(1_000_000, 100_000);
+      const under = await processCase({ ...deps(scripted(...investigate(), turn([propose()])).model, fakePaypal()), dailyCapUsd: 3.01 }, await openCase(await seedOrder()));
+      expect(under.status).toBe("resolved");
+      const none = await processCase(deps(scripted(...investigate(), turn([propose()])).model, fakePaypal()), await openCase(await seedOrder()));
+      expect(none.status).toBe("resolved");
+    });
+  });
 });

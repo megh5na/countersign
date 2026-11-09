@@ -48,7 +48,9 @@ export function buildContext(f: ContextFacts): Context {
 
   const buyer90 = f.buyerRefunds.filter((r) => {
     const t = r.createdAt.getTime();
-    return t <= nowMs && nowMs - t <= 90 * DAY_MS;
+    // No upper bound on purpose: a refund stamped after our clock was read (a concurrent claim, or clock skew) must still
+    // count. Counting too much only sends a case to approval; counting too little pays money out of policy.
+    return nowMs - t <= 90 * DAY_MS;
   });
 
   let daysSinceDelivery: number | null = null;

@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "eval": "tsx evals/run.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",

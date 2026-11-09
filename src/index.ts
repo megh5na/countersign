@@ -39,7 +39,7 @@ const app = createApp({
   orders: createOrderRepo(db),
   webhooks: createWebhookRepo(db),
   webhookId: config.PAYPAL_WEBHOOK_ID,
-  cases: { repo: createCaseRepo(db), run: agentModel ? (caseId) => processCase({ db, model: agentModel, paypal }, caseId) : undefined },
+  cases: { repo: createCaseRepo(db), run: agentModel ? (caseId) => processCase({ db, model: agentModel, paypal, dailyCapUsd: config.MODEL_DAILY_CAP_USD }, caseId) : undefined },
   approvals: { repo: approvalRepo, run: (id) => runApproved({ db, paypal, approvals: approvalRepo }, id) },
   policies: {
     repo: createPolicyRepo(db),
@@ -48,9 +48,10 @@ const app = createApp({
   },
   clientId: config.PAYPAL_CLIENT_ID,
   env: config.PAYPAL_ENV,
+  trustProxy: config.TRUST_PROXY,
 });
 
-startSweeper({ db, paypal, approvals: approvalRepo, model: agentModel });
+startSweeper({ db, paypal, approvals: approvalRepo, model: agentModel, dailyCapUsd: config.MODEL_DAILY_CAP_USD });
 
 serve({ fetch: app.fetch, port: config.PORT }, (info) => {
   console.log(`countersign listening on :${info.port}`);

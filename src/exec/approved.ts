@@ -22,11 +22,12 @@ type Plan = { kind: "existing" | "new"; exec: ExecutionRow } | { kind: "refused"
 
 export async function executeApprovedRefund(deps: ExecutorDeps, approvalId: string): Promise<ExecuteResult> {
   const { db } = deps;
-  const now = (deps.now ?? (() => new Date()))();
+  const clock = deps.now ?? (() => new Date());
   const refuse = (reason: string): Plan => ({ kind: "refused", reason });
 
   const plan: Plan = await db.transaction(async (tx) => {
     await tx.execute(LOCK);
+    const now = clock(); // after the lock, so expiry and the facts are judged at the moment we actually decide
     const [a] = await tx.select().from(approvals).where(eq(approvals.id, approvalId)).for("update");
     if (!a) return refuse("approval_not_found");
 

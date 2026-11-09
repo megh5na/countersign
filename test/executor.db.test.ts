@@ -172,6 +172,27 @@ describe.skipIf(!enabled)("executor against real Postgres", { timeout: 60_000 },
     }
   });
 
+  // REGRESSION (found by eval S05): the per-buyer cap was bypassed when one buyer's claims ran at the same time, because a
+  // refund reserved a moment after a claim read its clock was ignored as "in the future". Three rounds, same buyer.
+  it("the per-buyer cap holds when one buyer's claims on different orders run simultaneously", async () => {
+    const buyerCapped = Policy.parse({
+      currency: "USD",
+      rules: [{ id: "R1", effect: "allow", remedy: "partial_tier_b", when: { claim_type_in: ["damaged"], days_since_delivery_lte: 30 }, amount: { percent_of_capture: 50 } }],
+      limits: { buyer_90d_cap_minor: 3000 }, // one $19.00 refund fits; two ($38.00) do not
+    });
+    for (let round = 0; round < 3; round++) {
+      await db.execute(sql`truncate refund_ledger, executions`);
+      const pp = fakePaypal();
+      const buyer = `same-buyer-${round}`;
+      const reqs = await Promise.all([request({ payerId: buyer }, damaged, buyerCapped), request({ payerId: buyer }, damaged, buyerCapped), request({ payerId: buyer }, damaged, buyerCapped)]);
+      const results = await Promise.all(reqs.map((r) => executeRefund({ db, paypal: pp }, r)));
+      expect(results.filter((r) => r.outcome === "refunded")).toHaveLength(1);
+      expect(results.filter((r) => r.outcome === "not_allowed")).toHaveLength(2);
+      expect(pp.calls).toHaveLength(1);
+      expect((await ledger()).reduce((n, r) => n + r.amountMinor, 0)).toBe(1900);
+    }
+  });
+
   it("a timeout keeps the amount reserved (counts toward caps); retrying the same decision reuses the key and finishes", async () => {
     let mode: Mode = "timeout_after_create";
     const pp = fakePaypal(() => mode);

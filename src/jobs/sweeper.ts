@@ -23,6 +23,7 @@ export interface SweeperDeps {
   approvals: ApprovalRepo;
   model?: AgentModel; // absent = cases are not restarted
   now?: () => Date;
+  dailyCapUsd?: number; // passed to the case pipeline when the sweeper restarts a case
   openAfterMs?: number;
   stalledAfterMs?: number;
   approvedAfterMs?: number;
@@ -54,7 +55,7 @@ export async function runSweep(deps: SweeperDeps): Promise<SweepReport> {
   if (deps.model) {
     const stale = await db.select({ id: cases.id }).from(cases).where(and(eq(cases.status, "open"), lt(cases.createdAt, ago(deps.openAfterMs ?? 30_000)))).limit(limit);
     for (const c of stale) {
-      const r = await processCase({ db, model: deps.model, paypal: deps.paypal, now: deps.now }, c.id);
+      const r = await processCase({ db, model: deps.model, paypal: deps.paypal, now: deps.now, dailyCapUsd: deps.dailyCapUsd }, c.id);
       if (r.status !== "skipped") report.casesStarted++;
     }
   }

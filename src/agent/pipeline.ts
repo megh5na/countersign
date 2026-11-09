@@ -3,7 +3,7 @@
 // The model's only influence on money is the claim type and remedy tier it proposes; the engine and executor take it from there.
 
 import { randomUUID } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { eq, gte, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { createPolicyRepo } from "../db/policies.js";
 import { createApprovalRepo } from "../db/approvals.js";
@@ -20,12 +20,25 @@ import { Policy, movesMoney } from "../policy/schema.js";
 import { type AgentModel, runAgent } from "./agent.js";
 import { createAgentData } from "./data.js";
 
+// Claude Sonnet 5.5 list prices, US dollars per million tokens. Used only to estimate spend against the daily cap.
+export const AGENT_PRICE_PER_M = { input: 2, output: 10 } as const;
+
 export interface PipelineDeps {
   db: Db;
   model: AgentModel;
   paypal: Pick<PayPalClient, "refundCapture">;
   modelName?: string;
   now?: () => Date;
+  dailyCapUsd?: number; // when set, no new agent run starts once today's (UTC) estimated spend reaches this
+}
+
+export async function modelSpendTodayUsd(db: Db, now: Date): Promise<number> {
+  const startOfUtcDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const [row] = await db
+    .select({ tin: sql<number>`coalesce(sum(${agentRuns.tokensIn}), 0)`, tout: sql<number>`coalesce(sum(${agentRuns.tokensOut}), 0)` })
+    .from(agentRuns)
+    .where(gte(agentRuns.createdAt, startOfUtcDay));
+  return (Number(row?.tin ?? 0) * AGENT_PRICE_PER_M.input + Number(row?.tout ?? 0) * AGENT_PRICE_PER_M.output) / 1_000_000;
 }
 
 export type CaseStatus = "resolved" | "needs_approval" | "denied" | "NEEDS_HUMAN" | "error" | "skipped";
@@ -57,6 +70,12 @@ export async function processCase(deps: PipelineDeps, caseId: string): Promise<P
     const active = await createPolicyRepo(db).getActive();
     if (!active) return await finish("NEEDS_HUMAN", "no active policy: activate one first");
     const policy = Policy.parse(active.rulesJson);
+
+    // Spend guard: once the day's model budget is used up, new cases wait for a human instead of calling the model.
+    if (deps.dailyCapUsd !== undefined) {
+      const spent = await modelSpendTodayUsd(db, now);
+      if (spent >= deps.dailyCapUsd) return await finish("NEEDS_HUMAN", `daily AI spend cap reached ($${spent.toFixed(2)} of $${deps.dailyCapUsd.toFixed(2)}); this case needs a human`);
+    }
 
     // ---- 1. The agent investigates and proposes (it can read; it cannot act) ----
     const run = await runAgent({ model: deps.model, data: createAgentData(db), now: () => now }, { orderId: order.id, buyerMessage: c.buyerMessage, policyRules: policy });
@@ -105,7 +124,8 @@ export async function processCase(deps: PipelineDeps, caseId: string): Promise<P
 
     // ---- 4. ALLOW: money-moving remedies go through the executor, which re-checks everything under a lock ----
     if (!movesMoney(p.remedy)) return await finish("resolved", `${p.remedy}: no money moved (${why})`, decisionId);
-    const exec = await executeRefund({ db, paypal: deps.paypal, now: () => now }, { decisionId, orderId: order.id, proposal, policy });
+    // The executor reads its own clock under the lock. Passing this pipeline's `now` (taken before a ~30 s agent run) would be stale.
+    const exec = await executeRefund({ db, paypal: deps.paypal, now: deps.now }, { decisionId, orderId: order.id, proposal, policy });
     if (exec.outcome === "not_allowed") {
       await askForApproval(); // the facts changed between the decision and the lock; a human should look
       return await finish("needs_approval", `executor re-check: ${exec.reason}`, decisionId);

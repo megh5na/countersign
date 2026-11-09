@@ -46,12 +46,13 @@ type Plan =
 
 export async function executeRefund(deps: ExecutorDeps, req: ExecuteRequest): Promise<ExecuteResult> {
   const { db } = deps;
-  const now = (deps.now ?? (() => new Date()))();
+  const clock = deps.now ?? (() => new Date());
   const key = `refund-${req.decisionId}`;
 
   // ---- Phase A: decide and reserve, atomically ----
   const plan: Plan = await db.transaction(async (tx) => {
     await tx.execute(LOCK); // serialises every decision-and-reserve; released at commit
+    const now = clock(); // read AFTER the lock: we may have waited behind other claims, and the facts must be current
     const [existing] = await tx.select().from(executions).where(eq(executions.idempotencyKey, key));
     if (existing) return { kind: "existing", exec: existing };
 

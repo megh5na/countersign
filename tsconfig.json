@@ -11,5 +11,5 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src", "drizzle.config.ts", "test"]
+  "include": ["src", "drizzle.config.ts", "test", "evals"]
 }

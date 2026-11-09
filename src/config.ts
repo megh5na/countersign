@@ -16,6 +16,10 @@ const Env = z.object({
   ADMIN_TOKEN: z.string().min(16).optional(), // guards the policy routes; they answer 503 until it is set
   DATABASE_URL: z.string().min(1),
   PORT: z.coerce.number().default(3000),
+  // Only set TRUST_PROXY=true when deployed behind a proxy you control (Render): it makes rate limits read X-Forwarded-For.
+  TRUST_PROXY: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  // Stops the case agent when today's model spend reaches this many US dollars (checked before each case).
+  MODEL_DAILY_CAP_USD: z.coerce.number().positive().default(5),
 });
 
 export type Config = z.infer<typeof Env>;
