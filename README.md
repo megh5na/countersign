@@ -28,24 +28,7 @@ The first request after a quiet period can take 30 to 60 seconds while the free 
 
 ## How it works
 
-```mermaid
-flowchart LR
-  Buyer([Buyer]) -->|pays| Store["Store page"]
-  Store --> API["Countersign server"]
-  Buyer -->|reports a problem| API
-  PayPal[(PayPal sandbox)] -->|signed webhooks| API
-  API --> Agent["Claude agent (read-only tools)"]
-  Agent -->|proposes claim type and remedy| Engine["Policy engine (plain code)"]
-  Engine -->|allowed| Executor["Executor"]
-  Engine -->|needs the owner| Inbox["Approvals inbox"]
-  Engine -->|refused| Stop["Logged, no refund"]
-  Inbox -->|approved| Executor
-  Executor -->|refund| PayPal
-  Merchant([Merchant]) --> Console["Console"]
-  Console --> Inbox
-  Console -->|policy in English| Compiler["Claude (rules and tests)"]
-  Compiler -->|tested, then activated by a human| Engine
-```
+![How Countersign works: a buyer's claim goes through the agent, the policy engine and the executor](docs/architecture.svg)
 
 The idea is that the model proposes and the code decides. In practice that means:
 
