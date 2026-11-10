@@ -43,6 +43,10 @@ export function createApp(deps: AppDeps) {
     }
   });
 
+  // For uptime pingers that keep the free host awake. It answers without touching the database, so a ping every few
+  // minutes never keeps the database awake (and never burns its monthly compute allowance). Use /health to check the database.
+  app.get("/ping", (c) => c.json({ ok: true }));
+
   // Rate limits on the public, money- and model-spending endpoints (see src/http/rateLimit.ts).
   const HOUR = 3_600_000;
   const ip = (c: Parameters<typeof clientIp>[0]) => clientIp(c, deps.trustProxy ?? false);

@@ -1,7 +1,7 @@
 // webhook repository and order repository. used by the app and the webhook endpoint.
 
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { decimalToMinor } from "../money.js";
 import type { Db } from "./client.js";
@@ -110,7 +110,13 @@ export function createOrderRepo(db: Db): OrderRepo {
     async setCapture(paypalOrderId, c) {
       await db
         .update(orders)
-        .set({ captureId: c.captureId, payerId: c.payerId, buyerEmail: c.buyerEmail })
+        .set({
+          captureId: c.captureId, payerId: c.payerId, buyerEmail: c.buyerEmail,
+          // The demo store has no shipping step, so an order counts as delivered when it is paid. A real shop would set
+          // this from tracking. Without a delivery date the policy cannot check its time window and every claim escalates.
+          // An existing delivery date is never overwritten.
+          deliveredAt: sql`coalesce(${orders.deliveredAt}, now())`,
+        })
         .where(eq(orders.paypalOrderId, paypalOrderId));
     },
   };

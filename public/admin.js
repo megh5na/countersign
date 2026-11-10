@@ -132,7 +132,7 @@ function signOut(message) {
 signoutBtn.addEventListener("click", () => signOut());
 
 function renderLogin(message) {
-  const input = h("input", { type: "password", placeholder: "Admin token", autocomplete: "off", "aria-label": "Admin token", style: "width:100%" });
+  const input = h("input", { type: "password", placeholder: "Access token", autocomplete: "off", "aria-label": "Access token", style: "width:100%" });
   const note = h("div", { class: "banner err", hidden: !message }, message || "");
   const go = async () => {
     setToken(input.value.trim());
@@ -146,7 +146,7 @@ function renderLogin(message) {
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
   app.replaceChildren(h("div", { class: "card login" },
     h("h2", null, "Merchant sign-in"),
-    h("p", { class: "muted" }, "Paste the admin token for this server. It is kept only for this browser session."),
+    h("p", { class: "muted" }, "Paste the admin token, or the read-only judge token from the README. It is kept only for this browser session."),
     note, input, h("div", { style: "margin-top:12px" }, h("button", { class: "btn primary", type: "button", onclick: go }, "Sign in"))));
   input.focus();
 }

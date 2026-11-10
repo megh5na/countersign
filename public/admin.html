@@ -20,6 +20,8 @@
     nav button { border:0; background:none; color:var(--muted); padding:8px 12px; border-radius:8px; font:inherit; cursor:pointer; }
     nav button[aria-selected="true"] { background:var(--infobg); color:var(--accent); font-weight:600; }
     .spacer { flex:1; }
+    .storelink { color:var(--muted); font-size:14px; text-decoration:none; }
+    .storelink:hover { color:var(--accent); }
     main { max-width:1000px; margin:0 auto; padding:20px 16px 64px; }
     .card { border:1px solid var(--line); background:var(--card); border-radius:12px; padding:16px; margin-bottom:12px; }
     .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
@@ -62,6 +64,7 @@
   <header>
     <div class="bar">
       <div class="brand">Countersign<small>merchant console · sandbox</small></div>
+      <a class="storelink" href="/">Store page</a>
       <nav id="tabs" role="tablist" hidden>
         <button role="tab" data-tab="approvals" aria-selected="true">Approvals <span id="badge" class="chip warn" hidden></span></button>
         <button role="tab" data-tab="cases" aria-selected="false">Cases</button>

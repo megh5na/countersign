@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../src/db/client.js";
 import { createDemoRepo } from "../src/db/demo.js";
 import { createPolicyRepo } from "../src/db/policies.js";
+import { createOrderRepo } from "../src/db/repos.js";
 import { policies } from "../src/db/schema.js";
 import { seedDemoPolicy } from "../src/db/seed.js";
 import { DEMO_POLICY } from "../src/policy/demoPolicy.js";
@@ -102,6 +103,34 @@ describe.skipIf(!dbTestsEnabled)("demo reset and seed on real Postgres", { timeo
 
       await db.update(policies).set({ status: "retired" });
       expect(await seedDemoPolicy(db)).toEqual({ seeded: true, version: 2 });
+    });
+  });
+
+  // Without a delivery date the policy cannot check its time window, so every claim on a new order escalated.
+  describe("delivery date at payment", () => {
+    const deliveredAge = async (paypalOrderId: string) =>
+      ((await client.unsafe(`select (now() - delivered_at) as age, delivered_at is null as missing from orders where paypal_order_id = ${lit(paypalOrderId)}`)) as unknown as { age: string | null; missing: boolean }[])[0];
+
+    it("is set when the order is paid, and not before", async () => {
+      const orders = createOrderRepo(db);
+      await orders.insertOrder({ paypalOrderId: "PP-A", amountMinor: 3800, currency: "USD" });
+      expect((await deliveredAge("PP-A"))?.missing).toBe(true); // created but not paid: no delivery date
+      await orders.setCapture("PP-A", { captureId: "CAP-A", payerId: "payer", buyerEmail: "b@example.com" });
+      const after = await deliveredAge("PP-A");
+      expect(after?.missing).toBe(false);
+      const ageSeconds = Number((await client.unsafe(`select extract(epoch from (now() - delivered_at))::float as s from orders where paypal_order_id = 'PP-A'`) as unknown as { s: number }[])[0]?.s);
+      expect(ageSeconds).toBeGreaterThanOrEqual(0);
+      expect(ageSeconds).toBeLessThan(60);
+    });
+
+    it("never overwrites a delivery date that already exists, even when the capture is repeated", async () => {
+      const orders = createOrderRepo(db);
+      await orders.insertOrder({ paypalOrderId: "PP-B", amountMinor: 3800, currency: "USD" });
+      await client.unsafe(`update orders set delivered_at = now() - interval '40 days' where paypal_order_id = 'PP-B'`);
+      await orders.setCapture("PP-B", { captureId: "CAP-B", payerId: "payer" });
+      await orders.setCapture("PP-B", { captureId: "CAP-B", payerId: "payer" });
+      const days = Number((await client.unsafe(`select extract(day from (now() - delivered_at))::int as d from orders where paypal_order_id = 'PP-B'`) as unknown as { d: number }[])[0]?.d);
+      expect(days).toBe(40);
     });
   });
 });
