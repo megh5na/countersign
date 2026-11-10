@@ -203,7 +203,7 @@ async function approvalsView(view) {
     if (!r.ok) return list.replaceChildren(h("div", { class: "banner err" }, errText(r)));
     const items = r.body.approvals;
     updateBadge();
-    if (items.length === 0) return list.replaceChildren(h("div", { class: "empty" }, status === "pending" ? "Nothing is waiting for your approval." : "No " + status + " approvals."));
+    if (items.length === 0) return list.replaceChildren(h("div", { class: "empty" }, status === "pending" ? "Nothing is waiting for your approval. Claims that need a person but involve no refund (for example an unclear request) are under Cases, filter \"Needs you\"." :"No " + status + " approvals."));
     list.replaceChildren(...items.map((a) => approvalCard(a, load)));
   }
   await load();
